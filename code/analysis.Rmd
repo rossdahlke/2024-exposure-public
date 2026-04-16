@@ -61,6 +61,7 @@ library(stargazer)
 library(broom)
 library(car) # for vif()
 library(kableExtra) # for kable_styling
+library(ggsignif)
 ```
 
 \newpage
@@ -72,6 +73,14 @@ library(kableExtra) # for kable_styling
 main_2024 <- read_csv("../data/main-2024-person-level.csv") %>% mutate(year = "2024")
 main_2020 <- read_csv("../data/main-2020-person-level.csv") %>% mutate(year = "2020")
 main_2016 <- read_csv("../data/main-2016-person-level.csv") %>% mutate(year = "2016")
+
+# Hard-coded 2016 referral values from paper
+referrers_2016 <- tibble(
+  url_type = c("untrustworthy", "hard_news", "other"),
+  facebook_refs_per = c(0.151, 0.059, 0.075),  # Facebook referrals
+  twitter_refs_per = c(0.010, 0.015, 0.008),   # Twitter referrals
+  google_refs_per = c(0.033, 0.062, 0.0475)    # Google referrals
+)
 
 # QA check of loaded data
 print("Data Loading QA Check:")
@@ -321,6 +330,7 @@ cohens_d_2020_2016 <- (exposure_diff_2020_2016$additional[["Mean.x"]] -
 ```{r}
 # Extract numeric results for H1a (2024 > 2020)
 t_stat_h1a <- exposure_diff_2024_2020_greater$coefficients["t.value"]
+df_h1a     <- exposure_diff_2024_2020_greater$coefficients["df"]
 p_val_h1a  <- exposure_diff_2024_2020_greater$coefficients["p.value"]
 mean_2024  <- exposure_diff_2024_2020_greater$additional[["Mean.x"]]
 mean_2020  <- exposure_diff_2024_2020_greater$additional[["Mean.y"]]
@@ -329,6 +339,7 @@ d_h1a      <- cohens_d_2024_2020  # from your code snippet
 
 # Extract numeric results for H1b (2024 < 2020)
 t_stat_h1b <- exposure_diff_2024_2020_less$coefficients["t.value"]
+df_h1b     <- exposure_diff_2024_2020_less$coefficients["df"]
 p_val_h1b  <- exposure_diff_2024_2020_less$coefficients["p.value"]
 # The mean_2024, mean_2020, and diff_means are the same in absolute value
 # but the direction of the test changes. We can reuse the same means:
@@ -343,6 +354,7 @@ h1a_table <- tibble::tibble(
   `Mean (2024)` = round(mean_2024, 3),
   `Mean (2020)` = round(mean_2020, 3),
   `Difference (2024 - 2020)` = round(diff_means_h1a, 3),
+  df = round(df_h1a, 0),
   `t-Statistic` = round(t_stat_h1a, 3),
   `p-Value (one-sided)` = format.pval(p_val_h1a, digits = 3),
   `Cohen's d` = round(d_h1a, 3)
@@ -356,6 +368,7 @@ h1b_table <- tibble::tibble(
   `Mean (2024)` = round(mean_2024, 3),
   `Mean (2020)` = round(mean_2020, 3),
   `Difference (2024 - 2020)` = round(diff_means_h1b, 3),
+  df = round(df_h1b, 0),
   `t-Statistic` = round(t_stat_h1b, 3),
   `p-Value (one-sided)` = format.pval(p_val_h1b, digits = 3),
   `Cohen's d` = round(d_h1b, 3)
@@ -366,6 +379,10 @@ knitr::kable(h1b_table, caption = "Hypothesis H1b Results: 2024 < 2020")
 
 
 ```{r exposure_visualization}
+# Named color vector for consistent colors across all Figure 1 panels
+npg_colors <- ggsci::pal_npg()(3)
+year_colors <- c("2016" = npg_colors[1], "2020" = npg_colors[2], "2024" = npg_colors[3])
+
 # Combine data for visualization
 exposure_combined <- bind_rows(exposure_2024, exposure_2020, exposure_2016)
 
@@ -383,7 +400,7 @@ exposure_plot <- ggplot(exposure_combined,
   theme(panel.grid.minor = element_blank(),
         panel.grid.major = element_blank(),
         legend.position = "none") +
-  ggsci::scale_color_npg()
+  scale_color_manual(values = year_colors)
 
 exposure_plot
 
@@ -391,7 +408,261 @@ exposure_plot
 ggsave("../figures/exposure_comparison.pdf", width = 8, height = 6)
 ```
 
-### 3.1.2 Robustness: Exposure Thresholds
+### 3.1.2 Relative Exposure Measures
+
+```{r relative-exposure-measure1}
+# === MEASURE 1: Untrustworthy visits as % of ALL web visits ===
+# Uses existing variables: percentage_visits_untrustworthy (2024), percentage_of_total (2020)
+
+# 2024
+pct_all_2024 <- tibble(
+  mean = diagis::weighted_mean(x = main_2024$percentage_visits_untrustworthy, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$percentage_visits_untrustworthy, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2024")
+
+# 2020
+pct_all_2020 <- tibble(
+  mean = diagis::weighted_mean(x = main_2020$percentage_of_total, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$percentage_of_total, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2020")
+
+# t-test: 2024 vs 2020
+pct_all_ttest <- weights::wtd.t.test(
+  x = main_2024$percentage_visits_untrustworthy,
+  weight = main_2024$weight,
+  y = main_2020$percentage_of_total,
+  weighty = main_2020$weight
+)
+
+# Cohen's d (same method as H1, lines 315-327)
+sd_pct_all_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$percentage_visits_untrustworthy, weights = main_2024$weight))
+sd_pct_all_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$percentage_of_total, weights = main_2020$weight))
+pooled_sd_pct_all <- sqrt((sd_pct_all_2024^2 + sd_pct_all_2020^2) / 2)
+cohens_d_pct_all <- (pct_all_ttest$additional[["Mean.x"]] - pct_all_ttest$additional[["Mean.y"]]) / pooled_sd_pct_all
+
+cat("=== MEASURE 1: % of ALL web visits ===\n")
+cat(sprintf("2024: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+            pct_all_2024$mean * 100, pct_all_2024$low * 100, pct_all_2024$high * 100))
+cat(sprintf("2020: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+            pct_all_2020$mean * 100, pct_all_2020$low * 100, pct_all_2020$high * 100))
+cat(sprintf("t(%.0f) = %.2f, p = %.4f, Cohen's d = %.3f\n",
+            pct_all_ttest$coefficients["df"],
+            pct_all_ttest$coefficients["t.value"],
+            pct_all_ttest$coefficients["p.value"],
+            cohens_d_pct_all))
+```
+
+```{r relative-exposure-measure2}
+# === MEASURE 2: Untrustworthy visits as % of NEWS visits ===
+# News visits = untrustworthy_n + hard_news_n
+# pct_news_untrustworthy now loaded from CSV (computed in data engineering)
+
+# 2024
+pct_news_2024 <- tibble(
+  mean = diagis::weighted_mean(x = main_2024$pct_news_untrustworthy, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$pct_news_untrustworthy, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2024")
+
+# 2020
+pct_news_2020 <- tibble(
+  mean = diagis::weighted_mean(x = main_2020$pct_news_untrustworthy, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$pct_news_untrustworthy, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2020")
+
+# t-test: 2024 vs 2020
+pct_news_ttest <- weights::wtd.t.test(
+  x = main_2024$pct_news_untrustworthy,
+  weight = main_2024$weight,
+  y = main_2020$pct_news_untrustworthy,
+  weighty = main_2020$weight
+)
+
+# Cohen's d (same method as H1, lines 315-327)
+sd_pct_news_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$pct_news_untrustworthy, weights = main_2024$weight))
+sd_pct_news_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$pct_news_untrustworthy, weights = main_2020$weight))
+pooled_sd_pct_news <- sqrt((sd_pct_news_2024^2 + sd_pct_news_2020^2) / 2)
+cohens_d_pct_news <- (pct_news_ttest$additional[["Mean.x"]] - pct_news_ttest$additional[["Mean.y"]]) / pooled_sd_pct_news
+
+cat("=== MEASURE 2: % of NEWS visits ===\n")
+cat(sprintf("2024: %.2f%% (95%% CI [%.2f%%, %.2f%%])\n",
+            pct_news_2024$mean * 100, pct_news_2024$low * 100, pct_news_2024$high * 100))
+cat(sprintf("2020: %.2f%% (95%% CI [%.2f%%, %.2f%%])\n",
+            pct_news_2020$mean * 100, pct_news_2020$low * 100, pct_news_2020$high * 100))
+cat(sprintf("t(%.0f) = %.2f, p = %.4f, Cohen's d = %.3f\n",
+            pct_news_ttest$coefficients["df"],
+            pct_news_ttest$coefficients["t.value"],
+            pct_news_ttest$coefficients["p.value"],
+            cohens_d_pct_news))
+```
+
+```{r ai-relative-exposure}
+# === AI-generated: proportion of all visits and news visits (2024 vs 2020) ===
+# percentage_visits_ai_untrustworthy and pct_news_ai_untrustworthy now loaded from CSV
+
+# --- MEASURE 1: AI as % of ALL web visits ---
+ai_pct_all_2024 <- tibble(
+  mean = diagis::weighted_mean(x = main_2024$percentage_visits_ai_untrustworthy, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$percentage_visits_ai_untrustworthy, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2024")
+
+ai_pct_all_2020 <- tibble(
+  mean = diagis::weighted_mean(x = main_2020$percentage_visits_ai_untrustworthy, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$percentage_visits_ai_untrustworthy, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2020")
+
+# t-test: 2024 vs 2020 AI % of all visits
+ai_pct_all_ttest <- weights::wtd.t.test(
+  x = main_2024$percentage_visits_ai_untrustworthy,
+  weight = main_2024$weight,
+  y = main_2020$percentage_visits_ai_untrustworthy,
+  weighty = main_2020$weight
+)
+
+# Cohen's d
+sd_ai_pct_all_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$percentage_visits_ai_untrustworthy, weights = main_2024$weight))
+sd_ai_pct_all_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$percentage_visits_ai_untrustworthy, weights = main_2020$weight))
+pooled_sd_ai_pct_all <- sqrt((sd_ai_pct_all_2024^2 + sd_ai_pct_all_2020^2) / 2)
+cohens_d_ai_pct_all <- (ai_pct_all_ttest$additional[["Mean.x"]] - ai_pct_all_ttest$additional[["Mean.y"]]) / pooled_sd_ai_pct_all
+
+cat("=== AI-GENERATED: % of ALL web visits ===\n")
+cat(sprintf("2024: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+            ai_pct_all_2024$mean * 100, ai_pct_all_2024$low * 100, ai_pct_all_2024$high * 100))
+cat(sprintf("2020: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+            ai_pct_all_2020$mean * 100, ai_pct_all_2020$low * 100, ai_pct_all_2020$high * 100))
+cat(sprintf("t(%.0f) = %.2f, p = %.4f, Cohen's d = %.3f\n",
+            ai_pct_all_ttest$coefficients["df"],
+            ai_pct_all_ttest$coefficients["t.value"],
+            ai_pct_all_ttest$coefficients["p.value"],
+            cohens_d_ai_pct_all))
+
+# --- MEASURE 2: AI as % of NEWS visits ---
+ai_pct_news_2024 <- tibble(
+  mean = diagis::weighted_mean(x = main_2024$pct_news_ai_untrustworthy, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$pct_news_ai_untrustworthy, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2024")
+
+ai_pct_news_2020 <- tibble(
+  mean = diagis::weighted_mean(x = main_2020$pct_news_ai_untrustworthy, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$pct_news_ai_untrustworthy, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96, year = "2020")
+
+# t-test: 2024 vs 2020 AI % of news visits
+ai_pct_news_ttest <- weights::wtd.t.test(
+  x = main_2024$pct_news_ai_untrustworthy,
+  weight = main_2024$weight,
+  y = main_2020$pct_news_ai_untrustworthy,
+  weighty = main_2020$weight
+)
+
+# Cohen's d
+sd_ai_pct_news_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$pct_news_ai_untrustworthy, weights = main_2024$weight))
+sd_ai_pct_news_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$pct_news_ai_untrustworthy, weights = main_2020$weight))
+pooled_sd_ai_pct_news <- sqrt((sd_ai_pct_news_2024^2 + sd_ai_pct_news_2020^2) / 2)
+cohens_d_ai_pct_news <- (ai_pct_news_ttest$additional[["Mean.x"]] - ai_pct_news_ttest$additional[["Mean.y"]]) / pooled_sd_ai_pct_news
+
+cat("\n=== AI-GENERATED: % of NEWS visits ===\n")
+cat(sprintf("2024: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+            ai_pct_news_2024$mean * 100, ai_pct_news_2024$low * 100, ai_pct_news_2024$high * 100))
+cat(sprintf("2020: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+            ai_pct_news_2020$mean * 100, ai_pct_news_2020$low * 100, ai_pct_news_2020$high * 100))
+cat(sprintf("t(%.0f) = %.2f, p = %.4f, Cohen's d = %.3f\n",
+            ai_pct_news_ttest$coefficients["df"],
+            ai_pct_news_ttest$coefficients["t.value"],
+            ai_pct_news_ttest$coefficients["p.value"],
+            cohens_d_ai_pct_news))
+```
+
+```{r tost-equivalence}
+# TOST equivalence tests (Two One-Sided Tests)
+# Tests whether 2024-2020 difference is small enough to conclude equivalence
+
+run_tost <- function(tt_result, sd_x, sd_y, label) {
+  obs_diff <- tt_result$additional[["Mean.x"]] - tt_result$additional[["Mean.y"]]
+  t_val <- tt_result$coefficients["t.value"]
+  df <- tt_result$coefficients["df"]
+  se_diff <- obs_diff / t_val
+  pooled_sd <- sqrt((sd_x^2 + sd_y^2) / 2)
+
+  results <- list()
+  for (d_bound in c(0.1, 0.2)) {
+    raw_bound <- d_bound * pooled_sd
+    t_lower <- (obs_diff + raw_bound) / se_diff
+    t_upper <- (obs_diff - raw_bound) / se_diff
+    p_lower <- pt(t_lower, df, lower.tail = FALSE)
+    p_upper <- pt(t_upper, df, lower.tail = TRUE)
+    p_tost <- max(p_lower, p_upper)
+    results[[paste0("d_", d_bound)]] <- list(
+      p_tost = p_tost, t_lower = t_lower, t_upper = t_upper,
+      p_lower = p_lower, p_upper = p_upper
+    )
+  }
+
+  ci90_low <- obs_diff - qt(0.95, df) * se_diff
+  ci90_high <- obs_diff + qt(0.95, df) * se_diff
+
+  cat(sprintf("=== TOST: %s ===\n", label))
+  cat(sprintf("df = %.0f\n", df))
+  cat(sprintf("90%% CI for d: [%.4f, %.4f]\n", ci90_low/pooled_sd, ci90_high/pooled_sd))
+  cat(sprintf("d=±0.1: p = %.4f (%s)\n", results$d_0.1$p_tost,
+              ifelse(results$d_0.1$p_tost < 0.05, "equivalent", "not equivalent")))
+  cat(sprintf("d=±0.2: p = %.4f (%s)\n", results$d_0.2$p_tost,
+              ifelse(results$d_0.2$p_tost < 0.05, "equivalent", "not equivalent")))
+
+  return(results)
+}
+
+tost_all <- run_tost(pct_all_ttest, sd_pct_all_2024, sd_pct_all_2020, "% of all visits")
+tost_news <- run_tost(pct_news_ttest, sd_pct_news_2024, sd_pct_news_2020, "% of news visits")
+```
+
+```{r panel-c-histogram}
+# Panel C: Histogram of untrustworthy visits as % of NEWS visits
+# Matches Panel B style; 2020 and 2024 only (2016 lacks total visit counts)
+# Pre-compute log10 so binwidth operates on log scale
+# Uses year_colors defined in exposure_visualization chunk for color consistency
+
+pct_histogram_data <- bind_rows(
+  main_2020 %>% transmute(year, pct = pct_news_untrustworthy),
+  main_2024 %>% transmute(year, pct = pct_news_untrustworthy)
+) %>%
+  mutate(log_pct = log10(pct + 1e-5))  # small constant so zeros appear on log scale
+
+# Mean lines (overall population weighted means including zeros)
+pct_means_log <- bind_rows(pct_news_2024, pct_news_2020) %>%
+  select(year, mean) %>%
+  mutate(
+    log_mean = log10(mean + 1e-5),
+    label = paste0("Mean = ", sprintf("%.2f%%", mean * 100))
+  )
+
+pct_histogram <- pct_histogram_data %>%
+  ggplot(aes(log_pct, fill = year)) +
+  geom_histogram(aes(y = after_stat(count / tapply(count, PANEL, sum)[PANEL])),
+                 binwidth = 0.2) +
+  geom_vline(data = pct_means_log, aes(xintercept = log_mean),
+             linetype = "dashed", color = "black", size = 0.8) +
+  geom_text(data = pct_means_log, aes(x = log_mean, y = 0.15, label = label),
+            vjust = 0, hjust = -0.1, size = 3, color = "black") +
+  scale_x_continuous(
+    breaks = c(-5, -4, -3, -2, -1),
+    labels = c("0.001%", "0.01%", "0.1%", "1%", "10%")
+  ) +
+  facet_wrap(.~year, ncol = 1) +
+  labs(x = "Untrustworthy Visits as % of News Visits (Log Scale)",
+       y = "Percentage of Participants",
+       title = "C") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_classic() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "none") +
+  scale_fill_manual(values = year_colors) +
+  scale_color_manual(values = year_colors)
+
+pct_histogram
+```
+
+### 3.1.3 Robustness: Exposure Thresholds
 
 ```{r}
 # Function to calculate exposure rates for different thresholds
@@ -497,11 +768,11 @@ calculate_threshold_comparison <- function(thresh) {
     `2024 Mean` = sprintf("%.3f", test_2024_2020$additional[["Mean.x"]]),
     `2020 Mean` = sprintf("%.3f", test_2020_2016$additional[["Mean.x"]]),
     `2016 Mean` = sprintf("%.3f", test_2020_2016$additional[["Mean.y"]]),
-    `2024 vs 2020 t` = sprintf("%.2f", test_2024_2020$coefficients[["t.value"]]),
+    `2024 vs 2020 t(df)` = sprintf("t(%.0f)=%.2f", test_2024_2020$coefficients[["df"]], test_2024_2020$coefficients[["t.value"]]),
     `2024 vs 2020 p` = format.pval(test_2024_2020$coefficients[["p.value"]], digits = 3),
-    `2020 vs 2016 t` = sprintf("%.2f", test_2020_2016$coefficients[["t.value"]]),
+    `2020 vs 2016 t(df)` = sprintf("t(%.0f)=%.2f", test_2020_2016$coefficients[["df"]], test_2020_2016$coefficients[["t.value"]]),
     `2020 vs 2016 p` = format.pval(test_2020_2016$coefficients[["p.value"]], digits = 3),
-    `2024 vs 2016 t` = sprintf("%.2f", test_2024_2016$coefficients[["t.value"]]),
+    `2024 vs 2016 t(df)` = sprintf("t(%.0f)=%.2f", test_2024_2016$coefficients[["df"]], test_2024_2016$coefficients[["t.value"]]),
     `2024 vs 2016 p` = format.pval(test_2024_2016$coefficients[["p.value"]], digits = 3)
   )
 }
@@ -517,6 +788,10 @@ knitr::kable(threshold_comparison_table,
 
 print("Threshold Robustness Analysis Complete")
 ```
+
+### 3.1.1 Sensitivity: Alternative Domain Classification Lists
+
+DOMAIN CLASSIFICATION LISTS INCLUDE NEWSGUARD'S PROPRIETARY RATINGS, WHICH WE ARE CONTRACTUALLY PROHIBITED FROM REDISTRIBUTING.
 
 ## 3.2 Exposure Intensity (H2)
 
@@ -578,9 +853,11 @@ diff_means_intensity <- mean_2024_intensity - mean_2020_intensity
 
 t_stat_h2a <- intensity_diff_greater$coefficients["t.value"]
 p_val_h2a  <- intensity_diff_greater$coefficients["p.value"]
+df_h2a     <- round(intensity_diff_greater$coefficients["df"], 0)
 
 t_stat_h2b <- intensity_diff_less$coefficients["t.value"]
 p_val_h2b  <- intensity_diff_less$coefficients["p.value"]
+df_h2b     <- round(intensity_diff_less$coefficients["df"], 0)
 ```
 
 ```{r}
@@ -600,6 +877,7 @@ h2a_table <- tibble::tibble(
   `Mean (2024)` = round(mean_2024_intensity, 2),
   `Mean (2020)` = round(mean_2020_intensity, 2),
   `Difference (2024 - 2020)` = round(diff_means_intensity, 2),
+  df = df_h2a,
   `t-Statistic` = round(t_stat_h2a, 2),
   `p-Value (one-sided)` = format.pval(p_val_h2a, digits = 3),
   `Cohen's d` = round(cohens_d_intensity, 3)
@@ -611,6 +889,7 @@ h2b_table <- tibble::tibble(
   `Mean (2024)` = round(mean_2024_intensity, 2),
   `Mean (2020)` = round(mean_2020_intensity, 2),
   `Difference (2024 - 2020)` = round(diff_means_intensity, 2),
+  df = df_h2b,
   `t-Statistic` = round(t_stat_h2b, 2),
   `p-Value (one-sided)` = format.pval(p_val_h2b, digits = 3),
   `Cohen's d` = round(cohens_d_intensity, 3)
@@ -679,8 +958,8 @@ intensity_histogram <- bind_rows(
   theme(panel.grid.minor = element_blank(),
         panel.grid.major = element_blank(),
         legend.position = "none") +
-  ggsci::scale_fill_npg() +
-  ggsci::scale_color_npg()
+  scale_fill_manual(values = year_colors) +
+  scale_color_manual(values = year_colors)
 
 intensity_histogram
 ```
@@ -955,17 +1234,19 @@ mean_65plus <- round(h4_age_ttest_greater$additional[["Mean.x"]], 3)
 mean_under30 <- round(h4_age_ttest_greater$additional[["Mean.y"]], 3)
 diff_age <- round(h4_age_ttest_greater$additional["Difference"], 2)
 age_t <- round(h4_age_ttest_greater$coefficients["t.value"], 2)
+age_df <- round(h4_age_ttest_greater$coefficients["df"], 0)
 age_p <- h4_age_ttest_greater$coefficients["p.value"]
 ```
 
 ```{r}
 # Create table for H4 results with group means
 h4_stats_table <- tibble::tibble(
-  Statistic = c("Mean Exposure (65+)", "Mean Exposure (18–29)", "Difference (65+ - 18–29)", "t-value", "p-value", "Cohen's d"),
+  Statistic = c("Mean Exposure (65+)", "Mean Exposure (18–29)", "Difference (65+ - 18–29)", "df", "t-value", "p-value", "Cohen's d"),
   `One-Tailed (Greater)` = c(
     mean_65plus,
     mean_under30,
     diff_age,
+    age_df,
     age_t,
     ifelse(age_p < 0.001, "< 0.001", format.pval(age_p, digits = 3)),
     round(cohens_d_age, 2)
@@ -980,12 +1261,13 @@ age_exposure_combined <- bind_rows(age_exposure_2024, age_exposure_2020, age_exp
   mutate(age_group = factor(age_group, levels = c("18-29", "30-44", "45-64", "65+")))
 
 # Create comparison plot following 2020 paper style
-age_plot <- ggplot(age_exposure_combined, 
-       aes(x = age_group, y = mean, ymin = low, ymax = high)) +
-  geom_pointrange(color = "black") +
-  scale_y_continuous(labels = scales::percent_format(), 
+age_plot <- ggplot(age_exposure_combined,
+       aes(x = age_group, y = mean, ymin = low, ymax = high, color = year)) +
+  geom_pointrange() +
+  scale_y_continuous(labels = scales::percent_format(),
                     breaks = seq(0, 1, .2),
                     limits = c(0, max(age_exposure_combined$high) * 1.1)) +
+  scale_color_manual(values = year_colors) +
   labs(x = "Age Group",
        y = "Percentage Exposed to\nUntrustworthy Websites",
        title = "A") +
@@ -993,7 +1275,8 @@ age_plot <- ggplot(age_exposure_combined,
   theme(panel.grid.minor = element_blank(),
           panel.grid.major = element_blank(),
           strip.text = element_text(size = 11),
-          strip.background = element_rect(fill = "white")) +
+          strip.background = element_rect(fill = "white"),
+          legend.position = "none") +
   facet_wrap(~year, ncol = 3)
 
 age_plot
@@ -1006,8 +1289,8 @@ ggsave("../figures/age_exposure_comparison.pdf", width = 12, height = 6)
 
 ```{r}
 main_generation <- main_2016 %>% select(untrustworthy_flag, weight, birthyr, year, untrustworthy_n) %>%
-  bind_rows(main_2020 %>% select(untrustworthy_flag, weight, birthyr, year, untrustworthy_n, percentage_of_total)) %>%
-  bind_rows(main_2024 %>% select(untrustworthy_flag, weight, birthyr, year, untrustworthy_n, percentage_visits_untrustworthy)) %>% 
+  bind_rows(main_2020 %>% select(untrustworthy_flag, weight, birthyr, year, untrustworthy_n, percentage_of_total, pct_news_untrustworthy)) %>%
+  bind_rows(main_2024 %>% select(untrustworthy_flag, weight, birthyr, year, untrustworthy_n, percentage_visits_untrustworthy, pct_news_untrustworthy)) %>%
   mutate(
     generation = case_when(
       birthyr >= 1901 & birthyr <= 1927 ~ "Greatest",
@@ -1017,8 +1300,8 @@ main_generation <- main_2016 %>% select(untrustworthy_flag, weight, birthyr, yea
       birthyr >= 1981 & birthyr <= 1996 ~ "Millenial",
       birthyr >= 1997 & birthyr <= 2023 ~ "Gen Z"
     ),
-    generation = factor(generation, levels = c("Greatest", "Silent", "Boomers", "Gen X", "Millenial", "Gen Z")),
-    # Create harmonized percentage variable
+    generation = factor(generation, levels = c("Gen Z", "Millenial", "Gen X", "Boomers", "Silent", "Greatest")),
+    # Create harmonized percentage variables
     percentage_untrustworthy = case_when(
       year == "2020" ~ percentage_of_total,
       year == "2024" ~ percentage_visits_untrustworthy,
@@ -1098,16 +1381,17 @@ calculate_weighted_diff <- function(gen, year1, year2) {
     weighty = temp$weight[temp$year == year1]
   )
   
-  mean_year2 <- weighted.mean(temp$untrustworthy_flag[temp$year == year2], temp$weight[temp$year == year2])
-  mean_year1 <- weighted.mean(temp$untrustworthy_flag[temp$year == year1], temp$weight[temp$year == year1])
-  
+  mean_year2 <- diagis::weighted_mean(x = temp$untrustworthy_flag[temp$year == year2], w = temp$weight[temp$year == year2])
+  mean_year1 <- diagis::weighted_mean(x = temp$untrustworthy_flag[temp$year == year1], w = temp$weight[temp$year == year1])
+
   diff_mean <- (mean_year2 - mean_year1) * 100
   t_value <- as.numeric(res$coefficients["t.value"])
+  df_value <- as.numeric(res$coefficients["df"])
   p_value <- as.numeric(res$coefficients["p.value"])
-  
+
   tibble(
     generation = gen,
-    diff = sprintf("Diff=%.1f%%, t=%.2f, p=%.3f", diff_mean, t_value, p_value)
+    diff = sprintf("Diff=%.1f%%, t(%.0f)=%.2f, p=%.3f", diff_mean, df_value, t_value, p_value)
   )
 }
 
@@ -1163,6 +1447,21 @@ generation_intensity <- generation_exposed %>%
 ```{r}
 # Percentage of total visits analysis - for 2020 and 2024 only
 # Filter to years with percentage data available
+# % of news visits (primary measure, used in figure)
+generation_pct_news <- main_generation %>%
+  filter(!is.na(pct_news_untrustworthy)) %>%
+  group_by(year, generation) %>%
+  summarise(
+    mean = diagis::weighted_mean(x = pct_news_untrustworthy, w = weight),
+    se = diagis::weighted_se(x = pct_news_untrustworthy, w = weight),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    low = mean - 1.96 * se,
+    high = mean + 1.96 * se
+  )
+
+# % of all visits (secondary measure, reported in text)
 generation_percentage <- main_generation %>%
   filter(!is.na(percentage_untrustworthy)) %>%
   group_by(year, generation) %>%
@@ -1256,8 +1555,8 @@ panel_b <- generation_intensity %>%
        y = "Average Visits\nAmong Exposed",
        title = "B) Visits Among Exposed", color = "Election Year")
 
-# Panel C: Percentage of total visits (2020-2024 only)
-panel_c <- generation_percentage %>%
+# Panel C: Percentage of news visits (2020-2024 only)
+panel_c <- generation_pct_news %>%
   ggplot(aes(generation, mean, ymin = low, ymax = high, color = year)) +
   geom_pointrange(position = position_dodge(.4)) +
   scale_y_continuous(labels = scales::percent_format()) +
@@ -1269,8 +1568,8 @@ panel_c <- generation_percentage %>%
         strip.background = element_rect(fill = "white"),
         legend.position = "none") +
   labs(x = "Generation",
-       y = "% of Total Visits",
-       title = "C) Share of All Website Visits", color = "Election Year") 
+       y = "% of News Visits",
+       title = "C) Share of News Visits", color = "Election Year")
 
 # Combine panels
 combined_plot <- panel_a + panel_b + panel_c +
@@ -1306,16 +1605,17 @@ calculate_intensity_diff <- function(gen, year1, year2) {
     weighty = temp$weight[temp$year == year1]
   )
 
-  mean_year2 <- weighted.mean(temp$untrustworthy_n[temp$year == year2], temp$weight[temp$year == year2])
-  mean_year1 <- weighted.mean(temp$untrustworthy_n[temp$year == year1], temp$weight[temp$year == year1])
+  mean_year2 <- diagis::weighted_mean(x = temp$untrustworthy_n[temp$year == year2], w = temp$weight[temp$year == year2])
+  mean_year1 <- diagis::weighted_mean(x = temp$untrustworthy_n[temp$year == year1], w = temp$weight[temp$year == year1])
 
   diff_mean <- mean_year2 - mean_year1
   t_value <- as.numeric(res$coefficients["t.value"])
+  df_value <- as.numeric(res$coefficients["df"])
   p_value <- as.numeric(res$coefficients["p.value"])
 
   tibble(
     generation = gen,
-    diff = sprintf("Diff=%.1f, t=%.2f, p=%.3f", diff_mean, t_value, p_value)
+    diff = sprintf("Diff=%.1f, t(%.0f)=%.2f, p=%.3f", diff_mean, df_value, t_value, p_value)
   )
 }
 
@@ -1335,16 +1635,17 @@ calculate_percentage_diff <- function(gen, year1, year2) {
     weighty = temp$weight[temp$year == year1]
   )
 
-  mean_year2 <- weighted.mean(temp$percentage_untrustworthy[temp$year == year2], temp$weight[temp$year == year2])
-  mean_year1 <- weighted.mean(temp$percentage_untrustworthy[temp$year == year1], temp$weight[temp$year == year1])
+  mean_year2 <- diagis::weighted_mean(x = temp$percentage_untrustworthy[temp$year == year2], w = temp$weight[temp$year == year2])
+  mean_year1 <- diagis::weighted_mean(x = temp$percentage_untrustworthy[temp$year == year1], w = temp$weight[temp$year == year1])
 
   diff_mean <- (mean_year2 - mean_year1) * 100  # Convert to percentage points
   t_value <- as.numeric(res$coefficients["t.value"])
+  df_value <- as.numeric(res$coefficients["df"])
   p_value <- as.numeric(res$coefficients["p.value"])
 
   tibble(
     generation = gen,
-    diff = sprintf("Diff=%.2f%%, t=%.2f, p=%.3f", diff_mean, t_value, p_value)
+    diff = sprintf("Diff=%.2f%%, t(%.0f)=%.2f, p=%.3f", diff_mean, df_value, t_value, p_value)
   )
 }
 
@@ -1382,12 +1683,15 @@ percentage_table <- generation_percentage %>%
   left_join(percentage_diff_2024_2020, by = "generation") %>%
   select(Generation = generation, `2020`, `2024`, everything())
 
-# Display tables
+# Display intensity table
 knitr::kable(intensity_table,
              caption = "Average Visits to Untrustworthy Websites Among Exposed Users by Generation",
              booktabs = TRUE) %>%
   kableExtra::kable_styling(latex_options = "scale_down")
+```
 
+```{r generation_percentage_table}
+# Display percentage table
 knitr::kable(percentage_table,
              caption = "Untrustworthy Visits as Percentage of Total Website Visits by Generation",
              booktabs = TRUE) %>%
@@ -1404,9 +1708,13 @@ calculate_weighted_diff_generation <- function(gen, year1, year2, variable) {
     temp <- main_generation %>%
       filter(generation == gen, year %in% c(year1, year2), untrustworthy_flag == 1)
   } else if (variable == "percentage_untrustworthy") {
-    # Percentage analysis
+    # Percentage of all visits analysis
     temp <- main_generation %>%
       filter(generation == gen, year %in% c(year1, year2), !is.na(percentage_untrustworthy))
+  } else if (variable == "pct_news_untrustworthy") {
+    # Percentage of news visits analysis
+    temp <- main_generation %>%
+      filter(generation == gen, year %in% c(year1, year2), !is.na(pct_news_untrustworthy))
   }
 
   if (nrow(temp) == 0) {
@@ -1422,25 +1730,26 @@ calculate_weighted_diff_generation <- function(gen, year1, year2, variable) {
     weighty = temp$weight[temp$year == year1]
   )
 
-  mean_year2 <- weighted.mean(var_data[temp$year == year2], temp$weight[temp$year == year2])
-  mean_year1 <- weighted.mean(var_data[temp$year == year1], temp$weight[temp$year == year1])
+  mean_year2 <- diagis::weighted_mean(x = var_data[temp$year == year2], w = temp$weight[temp$year == year2])
+  mean_year1 <- diagis::weighted_mean(x = var_data[temp$year == year1], w = temp$weight[temp$year == year1])
 
-  if (variable == "percentage_untrustworthy") {
+  if (variable %in% c("percentage_untrustworthy", "pct_news_untrustworthy")) {
     # Convert to percentage for display
     diff_mean <- (mean_year2 - mean_year1) * 100
-    format_str <- "Diff=%.3f%%, t=%.2f, p=%.3f"
+    format_str <- "Diff=%.3f%%, t(%.0f)=%.2f, p=%.3f"
   } else {
     # Keep as raw numbers for visit counts
     diff_mean <- mean_year2 - mean_year1
-    format_str <- "Diff=%.1f, t=%.2f, p=%.3f"
+    format_str <- "Diff=%.1f, t(%.0f)=%.2f, p=%.3f"
   }
 
   t_value <- as.numeric(res$coefficients["t.value"])
+  df_value <- as.numeric(res$coefficients["df"])
   p_value <- as.numeric(res$coefficients["p.value"])
 
   tibble(
     generation = gen,
-    diff = sprintf(format_str, diff_mean, t_value, p_value)
+    diff = sprintf(format_str, diff_mean, df_value, t_value, p_value)
   )
 }
 
@@ -1502,11 +1811,31 @@ percentage_table <- generation_percentage_formatted %>%
 
 print("Table: Percentage of Total Visits by Generation")
 print(knitr::kable(percentage_table, caption = "Untrustworthy Visits as Percentage of Total Website Visits by Generation"))
+
+# Generate table for % of news visits (2020-2024 only)
+generation_pct_news_formatted <- generation_pct_news %>%
+  mutate(
+    mean_ci = sprintf("%.2f%% [%.2f, %.2f]", mean * 100, low * 100, high * 100)
+  ) %>%
+  select(year, generation, mean_ci) %>%
+  pivot_wider(names_from = year, values_from = mean_ci)
+
+pct_news_diff_2024_2020 <- map_dfr(generations, ~ calculate_weighted_diff_generation(.x, 2020, 2024, "pct_news_untrustworthy")) %>%
+  rename(`2024 vs 2020` = diff)
+
+pct_news_table <- generation_pct_news_formatted %>%
+  left_join(pct_news_diff_2024_2020, by = "generation") %>%
+  select(Generation = generation, `2020`, `2024`, `2024 vs 2020`)
+
+print("Table: Percentage of News Visits by Generation")
+print(knitr::kable(pct_news_table, caption = "Untrustworthy Visits as Percentage of News Visits by Generation"))
 ```
 
 ### 3.4.3 Comprehensive Age and Generation Analysis
 
 ```{r age_generation_comprehensive_analysis}
+# ===== AGE GROUP ANALYSIS (TOP ROW) =====
+
 # Calculate age-based exposure for all three measures
 age_exposure_any <- bind_rows(age_exposure_2024, age_exposure_2020, age_exposure_2016) %>%
   mutate(age_group = factor(age_group, levels = c("18-29", "30-44", "45-64", "65+")))
@@ -1537,10 +1866,10 @@ age_exposed <- bind_rows(
     age_group = factor(age_group, levels = c("18-29", "30-44", "45-64", "65+"))
   )
 
-# Age percentage analysis (2020-2024 only)
+# Age percentage analysis (2020-2024 only) — uses pct_news_untrustworthy (loaded from CSV)
 age_percentage <- bind_rows(
-  main_2020 %>% select(percentage_of_total, weight, age_18_29, age_30_44, age_45_64, age_65_plus) %>% mutate(year = "2020"),
-  main_2024 %>% select(percentage_visits_untrustworthy, weight, age_18_29, age_30_44, age_45_64, age_65_plus) %>% mutate(year = "2024", percentage_of_total = percentage_visits_untrustworthy)
+  main_2020 %>% select(pct_news_untrustworthy, weight, age_18_29, age_30_44, age_45_64, age_65_plus) %>% mutate(year = "2020"),
+  main_2024 %>% select(pct_news_untrustworthy, weight, age_18_29, age_30_44, age_45_64, age_65_plus) %>% mutate(year = "2024")
 ) %>%
   pivot_longer(cols = starts_with("age_"), names_to = "age_var", values_to = "age_indicator") %>%
   filter(age_indicator == 1) %>%
@@ -1552,8 +1881,8 @@ age_percentage <- bind_rows(
   )) %>%
   group_by(year, age_group) %>%
   summarise(
-    mean = diagis::weighted_mean(x = percentage_of_total, w = weight),
-    se = diagis::weighted_se(x = percentage_of_total, w = weight),
+    mean = diagis::weighted_mean(x = pct_news_untrustworthy, w = weight),
+    se = diagis::weighted_se(x = pct_news_untrustworthy, w = weight),
     .groups = "drop"
   ) %>%
   mutate(
@@ -1561,6 +1890,8 @@ age_percentage <- bind_rows(
     high = mean + 1.96 * se,
     age_group = factor(age_group, levels = c("18-29", "30-44", "45-64", "65+"))
   )
+
+# ===== CREATE AGE PLOTS (TOP ROW) =====
 
 # Panel A: Age any exposure
 age_panel_a <- age_exposure_any %>%
@@ -1597,7 +1928,9 @@ age_panel_c <- age_percentage %>%
   theme(panel.grid.minor = element_blank(),
         panel.grid.major = element_blank(),
         legend.position = "none") +
-  labs(x = "Age Group", y = "% of Total Visits", title = "C) Age: Share of All Website Visits")
+  labs(x = "Age Group", y = "% of News Visits", title = "C) Age: Share of News Visits")
+
+# ===== MODIFY GENERATION PANELS (BOTTOM ROW) =====
 
 # Update existing generation panels with proper titles and no legends
 gen_panel_d <- generation_exposure %>%
@@ -1623,7 +1956,7 @@ gen_panel_e <- generation_intensity %>%
         legend.position = "bottom") +
   labs(x = "Generation", y = "Average Visits\nAmong Exposed", title = "E) Generation: Visits Among Exposed", color = "Election")
 
-gen_panel_f <- generation_percentage %>%
+gen_panel_f <- generation_pct_news %>%
   ggplot(aes(generation, mean, ymin = low, ymax = high, color = year)) +
   geom_pointrange(position = position_dodge(.4)) +
   scale_y_continuous(labels = scales::percent_format()) +
@@ -1632,7 +1965,9 @@ gen_panel_f <- generation_percentage %>%
   theme(panel.grid.minor = element_blank(),
         panel.grid.major = element_blank(),
         legend.position = "none") +
-  labs(x = "Generation", y = "% of Total Visits", title = "F) Generation: Share of All Website Visits")
+  labs(x = "Generation", y = "% of News Visits", title = "F) Generation: Share of News Visits")
+
+# ===== COMBINE INTO 2x3 LAYOUT =====
 
 # Create 2x3 combined plot
 age_generation_combined <- (age_panel_a + age_panel_b + age_panel_c) /
@@ -1642,6 +1977,70 @@ print(age_generation_combined)
 
 # Save comprehensive figure
 ggsave("../figures/age_generation_exposure_comprehensive.pdf", age_generation_combined, width = 13, height = 6.5)
+```
+
+### 3.4.4 AI-Generated: Relative Measures by Age Group
+
+```{r ai_age_relative_measures}
+# AI-generated untrustworthy as % of news visits by age group (2024 only — 2020 AI exposure is near-zero by age)
+ai_age_pct_news <- bind_rows(
+  main_2024 %>% select(pct_news_ai_untrustworthy, weight, age_18_29, age_30_44, age_45_64, age_65_plus) %>% mutate(year = "2024")
+) %>%
+  pivot_longer(cols = starts_with("age_"), names_to = "age_var", values_to = "age_indicator") %>%
+  filter(age_indicator == 1) %>%
+  mutate(age_group = case_when(
+    age_var == "age_18_29" ~ "18-29",
+    age_var == "age_30_44" ~ "30-44",
+    age_var == "age_45_64" ~ "45-64",
+    age_var == "age_65_plus" ~ "65+"
+  )) %>%
+  group_by(year, age_group) %>%
+  summarise(
+    mean = diagis::weighted_mean(x = pct_news_ai_untrustworthy, w = weight),
+    se = diagis::weighted_se(x = pct_news_ai_untrustworthy, w = weight),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    low = mean - 1.96 * se,
+    high = mean + 1.96 * se
+  )
+
+# AI-generated as % of all visits by age group (2024 only)
+ai_age_pct_all <- bind_rows(
+  main_2024 %>% select(percentage_visits_ai_untrustworthy, weight, age_18_29, age_30_44, age_45_64, age_65_plus) %>% mutate(year = "2024")
+) %>%
+  pivot_longer(cols = starts_with("age_"), names_to = "age_var", values_to = "age_indicator") %>%
+  filter(age_indicator == 1) %>%
+  mutate(age_group = case_when(
+    age_var == "age_18_29" ~ "18-29",
+    age_var == "age_30_44" ~ "30-44",
+    age_var == "age_45_64" ~ "45-64",
+    age_var == "age_65_plus" ~ "65+"
+  )) %>%
+  group_by(year, age_group) %>%
+  summarise(
+    mean = diagis::weighted_mean(x = percentage_visits_ai_untrustworthy, w = weight),
+    se = diagis::weighted_se(x = percentage_visits_ai_untrustworthy, w = weight),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    low = mean - 1.96 * se,
+    high = mean + 1.96 * se
+  )
+
+cat("=== AI-GENERATED: % of NEWS visits by age group (2024) ===\n")
+for (i in seq_len(nrow(ai_age_pct_news))) {
+  row <- ai_age_pct_news[i, ]
+  cat(sprintf("  %s: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+              row$age_group, row$mean * 100, row$low * 100, row$high * 100))
+}
+
+cat("\n=== AI-GENERATED: % of ALL visits by age group (2024) ===\n")
+for (i in seq_len(nrow(ai_age_pct_all))) {
+  row <- ai_age_pct_all[i, ]
+  cat(sprintf("  %s: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+              row$age_group, row$mean * 100, row$low * 100, row$high * 100))
+}
 ```
 
 ## 3.5 Partisan Differences (H5)
@@ -1771,17 +2170,19 @@ mean_rep <- round(h5_ttest$additional[["Mean.x"]], 3)
 mean_dem <- round(h5_ttest$additional[["Mean.y"]], 3)
 diff_party <- round(h5_ttest$additional["Difference"], 3)
 party_t <- round(h5_ttest$coefficients["t.value"], 2)
+party_df <- round(h5_ttest$coefficients["df"], 0)
 party_p <- h5_ttest$coefficients["p.value"]
 ```
 
 ```{r}
 # Create table for H5 results
 h5_stats_table <- tibble::tibble(
-  Statistic = c("Mean Exposure (Republican)", "Mean Exposure (Democrat)", "Difference (Rep - Dem)", "t-value", "p-value", "Cohen's d"),
+  Statistic = c("Mean Exposure (Republican)", "Mean Exposure (Democrat)", "Difference (Rep - Dem)", "df", "t-value", "p-value", "Cohen's d"),
   `One-Tailed (Greater)` = c(
     mean_rep,
     mean_dem,
     diff_party,
+    party_df,
     party_t,
     ifelse(party_p < 0.001, "< 0.001", format.pval(party_p, digits = 3)),
     round(cohens_d_party, 2)
@@ -1800,20 +2201,22 @@ partisan_exposure_combined <- bind_rows(partisan_exposure_2024, partisan_exposur
   mutate(party = factor(party, levels = c("Democrats", "Republicans")))
 
 # Create comparison plot following 2020 paper style with improved styling
-partisan_plot <- ggplot(partisan_exposure_combined, 
-       aes(x = party, y = mean, ymin = low, ymax = high)) +
-  geom_pointrange(color = "black", size = 0.8, fatten = 2) +
-  scale_y_continuous(labels = scales::percent_format(), 
+partisan_plot <- ggplot(partisan_exposure_combined,
+       aes(x = party, y = mean, ymin = low, ymax = high, color = year)) +
+  geom_pointrange(size = 0.8, fatten = 2) +
+  scale_y_continuous(labels = scales::percent_format(),
                     breaks = seq(0, 1, .2),
                     limits = c(0, max(partisan_exposure_combined$high) * 1.1)) +
+  scale_color_manual(values = year_colors) +
   labs(x = "Party Identification",
        y = "Percentage Exposed to\nUntrustworthy Websites",
-       title = "B") +
+       title = "C") +
   theme_bw() +
   theme(panel.grid.minor = element_blank(),
         panel.grid.major = element_blank(),
         strip.text = element_text(size = 11),
-        strip.background = element_rect(fill = "white")) +
+        strip.background = element_rect(fill = "white"),
+        legend.position = "none") +
   facet_wrap(~year, ncol = 3)
 
 # Print the plot
@@ -1823,6 +2226,7 @@ print(partisan_plot)
 ggsave("../figures/partisan-exposure-comparison.pdf", plot = partisan_plot, width = 12, height = 6)
 ```
 
+## 3.6 Media Decile
 
 ```{r}
 
@@ -1874,19 +2278,21 @@ ideology_decile_exposure_combined <- bind_rows(
 
 ```{r}
 # Create media ideology decile plot with improved styling
-media_plot <- ggplot(ideology_decile_exposure_combined, 
-       aes(x = factor(ideology_bin), y = mean, ymin = low, ymax = high)) +
-  geom_pointrange(size = 0.8, color = "black", fatten = 2) +
+media_plot <- ggplot(ideology_decile_exposure_combined,
+       aes(x = factor(ideology_bin), y = mean, ymin = low, ymax = high, color = year)) +
+  geom_pointrange(size = 0.8, fatten = 2) +
   scale_y_continuous(labels = scales::percent_format()) +
   coord_cartesian(ylim = c(0, max(ideology_decile_exposure_combined$high) * 1.1)) +
+  scale_color_manual(values = year_colors) +
   labs(x = "Media Diet Ideology\n(1 = Most Liberal, 10 = Most Conservative)",
        y = "Percentage Exposed to\nUntrustworthy Websites",
-       title = "C") +
+       title = "D") +
   theme_bw() +
   theme(panel.grid.minor = element_blank(),
         panel.grid.major = element_blank(),
         strip.text = element_text(size = 11),
-        strip.background = element_rect(fill = "white")) +
+        strip.background = element_rect(fill = "white"),
+        legend.position = "none") +
   facet_wrap(~year, ncol = 3)
 
 media_plot
@@ -1895,13 +2301,42 @@ media_plot
 ggsave("../figures/ideology_decile_exposure_comparison.pdf", width = 12, height = 6)
 ```
 
-```{r fig.height = 8, fig.width = 7}
-age_plot / partisan_plot / media_plot
-ggsave("../figures/three_by_three.pdf")
-ggsave("../figures/three_by_three.png")
+```{r generation_visualization}
+# Create generation comparison plot following the same style
+generation_plot <- ggplot(generation_exposure,
+       aes(x = generation, y = mean, ymin = low, ymax = high, color = year)) +
+  geom_pointrange(size = 0.8, fatten = 2) +
+  scale_y_continuous(labels = scales::percent_format(),
+                    breaks = seq(0, 1, .2)) +
+  coord_cartesian(ylim =  c(0, max(generation_exposure$high) * 1.1)) +
+  scale_color_manual(values = year_colors) +
+  labs(x = "Generation",
+       y = "Percentage Exposed to\nUntrustworthy Websites",
+       title = "B") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        strip.text = element_text(size = 11),
+        strip.background = element_rect(fill = "white"),
+        legend.position = "none") +
+  facet_wrap(~year, ncol = 3)
+
+# Print the plot
+print(generation_plot)
+
+# Save the plot with adjusted dimensions
+ggsave("../figures/generation_exposure_comparison.pdf", plot = generation_plot, width = 12, height = 6)
 ```
 
-### 3.5.2 Vote Choice and Voter Registration Analysis
+## 3.7 Combined Plot
+
+```{r fig.height = 9, fig.width = 9}
+age_plot / generation_plot / partisan_plot / media_plot
+ggsave("../figures/four_by_three.pdf")
+ggsave("../figures/four_by_three.png")
+```
+
+## 3.8 Vote Choice and Voter Registration Analysis
 
 ```{r vote_choice_analysis}
 # Vote choice analysis - Trump vs Harris supporters
@@ -1959,11 +2394,19 @@ vote_choice_test <- weights::wtd.t.test(
   weighty = harris_exposure$weight
 )
 
-# Calculate Cohen's d for weighted t-test
-pooled_sd <- sqrt(((sum(trump_exposure$weight) - 1) * vote_choice_test$additional[1]^2 +
-                   (sum(harris_exposure$weight) - 1) * vote_choice_test$additional[2]^2) /
-                  (sum(trump_exposure$weight) + sum(harris_exposure$weight) - 2))
-cohens_d <- (vote_choice_test$additional[3] - vote_choice_test$additional[4]) / pooled_sd
+# Calculate Cohen's d using Method 1 (Hmisc::wtd.var approach)
+sd_trump <- sqrt(Hmisc::wtd.var(
+  x = trump_exposure$untrustworthy_flag,
+  weights = trump_exposure$weight
+))
+sd_harris <- sqrt(Hmisc::wtd.var(
+  x = harris_exposure$untrustworthy_flag,
+  weights = harris_exposure$weight
+))
+pooled_sd <- sqrt((sd_trump^2 + sd_harris^2) / 2)
+mean_trump <- diagis::weighted_mean(x = trump_exposure$untrustworthy_flag, w = trump_exposure$weight)
+mean_harris <- diagis::weighted_mean(x = harris_exposure$untrustworthy_flag, w = harris_exposure$weight)
+cohens_d <- (mean_trump - mean_harris) / pooled_sd
 
 print(paste("Vote Choice Statistical Test:"))
 print(paste("Trump supporters: ", round(vote_choice_exposure$percentage[1], 1), "% (95% CI [",
@@ -1972,7 +2415,7 @@ print(paste("Trump supporters: ", round(vote_choice_exposure$percentage[1], 1), 
 print(paste("Harris supporters: ", round(vote_choice_exposure$percentage[2], 1), "% (95% CI [",
             round(vote_choice_exposure$ci_lower_pct[2], 1), "%, ",
             round(vote_choice_exposure$ci_upper_pct[2], 1), "%])"))
-print(paste("t-test: t =", round(vote_choice_test$coefficients[1], 3),
+print(paste("t-test: t(", round(vote_choice_test$coefficients[2], 1), ") =", round(vote_choice_test$coefficients[1], 3),
             ", p =", format.pval(vote_choice_test$coefficients[3], digits = 3),
             ", Cohen's d =", round(cohens_d, 3)))
 ```
@@ -2033,11 +2476,19 @@ voter_reg_test <- weights::wtd.t.test(
   weighty = nonregistered_data$weight
 )
 
-# Calculate Cohen's d
-pooled_sd_voter <- sqrt(((sum(registered_data$weight) - 1) * voter_reg_test$additional[1]^2 +
-                         (sum(nonregistered_data$weight) - 1) * voter_reg_test$additional[2]^2) /
-                        (sum(registered_data$weight) + sum(nonregistered_data$weight) - 2))
-cohens_d_voter <- (voter_reg_test$additional[3] - voter_reg_test$additional[4]) / pooled_sd_voter
+# Calculate Cohen's d using Method 1 (Hmisc::wtd.var approach)
+sd_registered <- sqrt(Hmisc::wtd.var(
+  x = registered_data$untrustworthy_flag,
+  weights = registered_data$weight
+))
+sd_nonregistered <- sqrt(Hmisc::wtd.var(
+  x = nonregistered_data$untrustworthy_flag,
+  weights = nonregistered_data$weight
+))
+pooled_sd_voter <- sqrt((sd_registered^2 + sd_nonregistered^2) / 2)
+mean_registered <- diagis::weighted_mean(x = registered_data$untrustworthy_flag, w = registered_data$weight)
+mean_nonregistered <- diagis::weighted_mean(x = nonregistered_data$untrustworthy_flag, w = nonregistered_data$weight)
+cohens_d_voter <- (mean_registered - mean_nonregistered) / pooled_sd_voter
 
 print(paste("Voter Registration Statistical Test:"))
 print(paste("Registered voters: ", round(voter_reg_exposure$percentage[1], 1), "% (95% CI [",
@@ -2046,7 +2497,7 @@ print(paste("Registered voters: ", round(voter_reg_exposure$percentage[1], 1), "
 print(paste("Non-registered: ", round(voter_reg_exposure$percentage[2], 1), "% (95% CI [",
             round(voter_reg_exposure$ci_lower_pct[2], 1), "%, ",
             round(voter_reg_exposure$ci_upper_pct[2], 1), "%])"))
-print(paste("t-test: t =", round(voter_reg_test$coefficients[1], 3),
+print(paste("t-test: t(", round(voter_reg_test$coefficients[2], 1), ") =", round(voter_reg_test$coefficients[1], 3),
             ", p =", format.pval(voter_reg_test$coefficients[3], digits = 3),
             ", Cohen's d =", round(cohens_d_voter, 3)))
 ```
@@ -2134,6 +2585,10 @@ ideology_exposure <- main_2024 %>%
 print("Personal Ideology and Untrustworthy Website Exposure:")
 print(knitr::kable(ideology_exposure, digits = 3))
 
+
+```
+
+```{r}
 # Focus on conservative extremism - compare Very Conservative vs others
 very_conservative_vs_others <- bind_rows(
   # Very Conservative (ideology = 5)
@@ -2167,6 +2622,89 @@ very_conservative_vs_others <- bind_rows(
 print("Very Conservative vs All Others:")
 print(knitr::kable(very_conservative_vs_others, digits = 3))
 ```
+
+```{r}
+# Focus on conservative extremism - compare Very Conservative vs others
+very_conservative_vs_conservative <- bind_rows(
+  # Very Conservative (ideology = 5)
+  tibble(
+    group = "Very Conservative",
+    mean = diagis::weighted_mean(
+      x = main_2024 %>% filter(ideology == 5) %>% pull(untrustworthy_flag),
+      w = main_2024 %>% filter(ideology == 5) %>% pull(weight)
+    ),
+    se = diagis::weighted_se(
+      x = main_2024 %>% filter(ideology == 5) %>% pull(untrustworthy_flag),
+      w = main_2024 %>% filter(ideology == 5) %>% pull(weight)
+    ),
+    n = sum(main_2024$ideology == 5, na.rm = TRUE)
+  ),
+  # All others
+  tibble(
+    group = "Conservative",
+    mean = diagis::weighted_mean(
+      x = main_2024 %>% filter(ideology == 4) %>% pull(untrustworthy_flag),
+      w = main_2024 %>% filter(ideology == 4) %>% pull(weight)
+    ),
+    se = diagis::weighted_se(
+      x = main_2024 %>% filter(ideology == 4) %>% pull(untrustworthy_flag),
+      w = main_2024 %>% filter(ideology == 4) %>% pull(weight)
+    ),
+    n = sum(main_2024$ideology == 4, na.rm = TRUE)
+  )
+)
+
+print("Very Conservative vs Conservative:")
+print(knitr::kable(very_conservative_vs_conservative, digits = 3))
+
+# Statistical test: Very Conservative vs Conservative
+very_conservative_data <- main_2024 %>% filter(ideology == 5 & weight > 0)
+conservative_data <- main_2024 %>% filter(ideology == 4 & weight > 0)
+
+test_vc_vs_c <- weights::wtd.t.test(
+  x = very_conservative_data$untrustworthy_flag,
+  y = conservative_data$untrustworthy_flag,
+  weight = very_conservative_data$weight,
+  weighty = conservative_data$weight
+)
+
+# Calculate Cohen's d
+sd_vc <- sqrt(Hmisc::wtd.var(
+  x = very_conservative_data$untrustworthy_flag,
+  weights = very_conservative_data$weight
+))
+sd_c <- sqrt(Hmisc::wtd.var(
+  x = conservative_data$untrustworthy_flag,
+  weights = conservative_data$weight
+))
+pooled_sd_vc_c <- sqrt((sd_vc^2 + sd_c^2) / 2)
+mean_vc <- diagis::weighted_mean(x = very_conservative_data$untrustworthy_flag, w = very_conservative_data$weight)
+mean_c <- diagis::weighted_mean(x = conservative_data$untrustworthy_flag, w = conservative_data$weight)
+cohens_d_vc_c <- (mean_vc - mean_c) / pooled_sd_vc_c
+
+cat("\n===========================================\n")
+cat("Very Conservative vs Conservative (2024)\n")
+cat("===========================================\n")
+se_vc <- diagis::weighted_se(x = very_conservative_data$untrustworthy_flag, w = very_conservative_data$weight)
+se_c <- diagis::weighted_se(x = conservative_data$untrustworthy_flag, w = conservative_data$weight)
+cat(sprintf("Very Conservative: %.1f%% (95%% CI [%.1f%%, %.1f%%])\n",
+            mean_vc * 100,
+            (mean_vc - 1.96 * se_vc) * 100,
+            (mean_vc + 1.96 * se_vc) * 100))
+cat(sprintf("Conservative: %.1f%% (95%% CI [%.1f%%, %.1f%%])\n",
+            mean_c * 100,
+            (mean_c - 1.96 * se_c) * 100,
+            (mean_c + 1.96 * se_c) * 100))
+cat(sprintf("t(%.1f) = %.2f, p %s, Cohen's d = %.2f\n",
+            test_vc_vs_c$coefficients[2],
+            test_vc_vs_c$coefficients[1],
+            ifelse(test_vc_vs_c$coefficients[3] < 0.001, "< 0.001",
+                   paste("=", format.pval(test_vc_vs_c$coefficients[3], digits = 3))),
+            cohens_d_vc_c))
+cat("===========================================\n")
+```
+
+
 
 ```{r ideology_2020_2024_comparison}
 # Compare personal ideology between 2020 and 2024
@@ -2284,15 +2822,43 @@ for (i in 1:nrow(ideology_tests)) {
     weighty = data_2020$weight
   )
 
-  # Calculate Cohen's d
-  pooled_sd <- sqrt(((sum(data_2024$weight) - 1) * test_result$additional[1]^2 +
-                     (sum(data_2020$weight) - 1) * test_result$additional[2]^2) /
-                    (sum(data_2024$weight) + sum(data_2020$weight) - 2))
-  cohens_d <- (test_result$additional[3] - test_result$additional[4]) / pooled_sd
+  # Calculate Cohen's d using Method 1 (Hmisc::wtd.var approach)
+  sd_2024 <- sqrt(Hmisc::wtd.var(
+    x = data_2024$untrustworthy_flag,
+    weights = data_2024$weight
+  ))
+  sd_2020 <- sqrt(Hmisc::wtd.var(
+    x = data_2020$untrustworthy_flag,
+    weights = data_2020$weight
+  ))
+  pooled_sd <- sqrt((sd_2024^2 + sd_2020^2) / 2)
+  mean_2024 <- diagis::weighted_mean(x = data_2024$untrustworthy_flag, w = data_2024$weight)
+  mean_2020 <- diagis::weighted_mean(x = data_2020$untrustworthy_flag, w = data_2020$weight)
+  cohens_d <- (mean_2024 - mean_2020) / pooled_sd
 
-  print(paste(ideo_label, "2020 vs 2024: t =", round(test_result$coefficients[1], 3),
-              ", p =", format.pval(test_result$coefficients[3], digits = 3),
-              ", Cohen's d =", round(cohens_d, 3)))
+  # Get exposure rates and CIs from comparison table
+  stats_2020 <- ideology_comparison %>% filter(year == "2020" & ideo5 == ideo_level)
+  stats_2024 <- ideology_comparison %>% filter(year == "2024" & ideo5 == ideo_level)
+
+  # Calculate percentage point change
+  pp_change <- stats_2024$percentage - stats_2020$percentage
+
+  # Print formatted output matching main-text.md style
+  cat("\n===========================================\n")
+  cat(ideo_label, "- Temporal Comparison (2020 vs 2024)\n")
+  cat("===========================================\n")
+  cat(sprintf("2020: %.1f%% (95%% CI [%.1f%%, %.1f%%])\n",
+              stats_2020$percentage, stats_2020$ci_lower_pct, stats_2020$ci_upper_pct))
+  cat(sprintf("2024: %.1f%% (95%% CI [%.1f%%, %.1f%%])\n",
+              stats_2024$percentage, stats_2024$ci_lower_pct, stats_2024$ci_upper_pct))
+  cat(sprintf("Change: %.1f percentage points\n", pp_change))
+  cat(sprintf("t(%.0f) = %.2f, p %s, Cohen's d = %.2f\n",
+              test_result$coefficients[2],
+              test_result$coefficients[1],
+              ifelse(test_result$coefficients[3] < 0.001, "< 0.001",
+                     paste("=", format.pval(test_result$coefficients[3], digits = 3))),
+              cohens_d))
+  cat("===========================================\n")
 }
 ```
 
@@ -2328,11 +2894,9 @@ ideology_plot
 ggsave("../figures/personal_ideology_exposure_comparison.pdf", width = 8, height = 6)
 ```
 
-## 3.6 Platform Referral Analysis (H6)
+## 3.9 Platform Referral Analysis (H6)
 
 REFERRAL DATA REQUIRES INDIVIDUAL-VISIT DATA WHICH ARE NOT AVAILABLE TO MAINTAIN PARTICIPANT PRIVACY.
-
-\newpage
 
 # 4. RQ2: AI-Generated Untrustworthy Website in 2024
 
@@ -2392,19 +2956,20 @@ cohens_d_ai <- (ai_exposure_diff$additional[["Mean.x"]] - ai_exposure_diff$addit
 ```{r}
 # Create table for H7 results with 95% CIs
 ai_exposure_stats_table <- tibble::tibble(
-  Statistic = c("2024 AI Exposure Rate", "2020 AI Exposure Rate", 
+  Statistic = c("2024 AI Exposure Rate", "2020 AI Exposure Rate",
                 "Difference (2024 - 2020)",
-                "t-Statistic", "p-value (one-sided)", "Cohen's d"),
+                "df", "t-Statistic", "p-value (one-sided)", "Cohen's d"),
   Value = c(
-    paste0(scales::percent(ai_exposure_2024$mean, accuracy = 0.1), " (95% CI: [", 
-           scales::percent(ai_exposure_2024$low, accuracy = 0.1), ", ", 
+    paste0(scales::percent(ai_exposure_2024$mean, accuracy = 0.1), " (95% CI: [",
+           scales::percent(ai_exposure_2024$low, accuracy = 0.1), ", ",
            scales::percent(ai_exposure_2024$high, accuracy = 0.1), "])"),
-    paste0(scales::percent(ai_exposure_2020$mean, accuracy = 0.1), " (95% CI: [", 
-           scales::percent(ai_exposure_2020$low, accuracy = 0.1), ", ", 
+    paste0(scales::percent(ai_exposure_2020$mean, accuracy = 0.1), " (95% CI: [",
+           scales::percent(ai_exposure_2020$low, accuracy = 0.1), ", ",
            scales::percent(ai_exposure_2020$high, accuracy = 0.1), "])"),
-    paste0(scales::percent(abs_diff_ai, accuracy = 0.1), " (95% CI: [", 
-           scales::percent(abs_diff_ci_low_ai, accuracy = 0.1), ", ", 
+    paste0(scales::percent(abs_diff_ai, accuracy = 0.1), " (95% CI: [",
+           scales::percent(abs_diff_ci_low_ai, accuracy = 0.1), ", ",
            scales::percent(abs_diff_ci_high_ai, accuracy = 0.1), "])"),
+    as.character(round(ai_exposure_diff$coefficients["df"], 0)),
     round(ai_exposure_diff$coefficients["t.value"], 2),
     ifelse(ai_exposure_diff$coefficients["p.value"] < 0.001, "< 0.001", format.pval(ai_exposure_diff$coefficients["p.value"], digits = 3)),
     round(cohens_d_ai, 3)
@@ -2442,7 +3007,7 @@ ggsave("../figures/ai_exposure_comparison.jpeg", width = 8, height = 6)
 
 ## 4.2 AI Content Proportion (H8)
 
-Note: UAINS and DNRPFC appear to be mutually exclusive (i.e., no domains in our data overlap between the two categories). 
+Note: UAINS and DNRPFC are mutually exclusive (i.e., no domains in our data overlap between the two categories). 
 
 ```{r}
 # Calculate proportion of AI content among untrustworthy sites for 2024
@@ -2523,12 +3088,13 @@ ratio_ci_high <- exp(log_ratio_prop + 1.96 * se_log_ratio_prop)
 # Create comprehensive summary table combining one-sided and two-sided results
 ai_proportion_stats_table <- tibble::tibble(
   Measure = c(
-    "2024 AI Content Proportion", 
-    "2020 AI Content Proportion", 
-    "Absolute Difference", 
-    "Relative Ratio", 
-    "Cohen's h", 
-    "Chi-squared", 
+    "2024 AI Content Proportion",
+    "2020 AI Content Proportion",
+    "Absolute Difference",
+    "Relative Ratio",
+    "Cohen's h",
+    "df",
+    "Chi-squared",
     "p-value"
   ),
   `One-Sided` = c(
@@ -2537,6 +3103,7 @@ ai_proportion_stats_table <- tibble::tibble(
     paste0(scales::percent(diff_one, accuracy = 0.1), " (95% CI: [", scales::percent(diff_one_low, accuracy = 0.1), ", ", scales::percent(diff_one_high, accuracy = 0.1), "])"),
     paste0(round(relative_ratio_prop, 2), "x (95% CI: [", round(ratio_ci_low, 2), ", ", round(ratio_ci_high, 2), "])"),
     as.character(cohens_h),
+    as.character(df_one),
     as.character(chi_sq_one),
     format.pval(p_one, digits = 3)
   ),
@@ -2546,6 +3113,7 @@ ai_proportion_stats_table <- tibble::tibble(
     paste0(scales::percent(diff_two, accuracy = 0.1), " (95% CI: [", scales::percent(diff_two_low, accuracy = 0.1), ", ", scales::percent(diff_two_high, accuracy = 0.1), "])"),
     paste0(round(relative_ratio_prop, 2), "x (95% CI: [", round(ratio_ci_low, 2), ", ", round(ratio_ci_high, 2), "])"),
     as.character(cohens_h),
+    as.character(df_two),
     as.character(chi_sq_two),
     format.pval(p_two, digits = 3)
   )
@@ -2580,6 +3148,194 @@ knitr::kable(ai_proportion_counts_table,
              format = "markdown")
 ```
 
+```{r talk_ai_exposure_two_panel}
+# ── Figure: Two-Panel AI Exposure Summary (for talks) ──────────────────────
+
+# Panel A: % of Americans exposed to AI-generated untrustworthy sites
+# Reuses ai_exposure_combined (built above from ai_exposure_2024 + ai_exposure_2020)
+talk_panel_a <- ggplot(ai_exposure_combined,
+       aes(x = year, y = mean, ymin = low, ymax = high)) +
+  geom_pointrange(size = 1, color = "black", fatten = 3) +
+  scale_y_continuous(labels = scales::percent_format(),
+                     limits = c(0, max(ai_exposure_combined$high) * 1.1)) +
+  labs(x = "Election Year",
+       y = "% of Americans Exposed to\nAI-Generated Untrustworthy Sites",
+       title = "") +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14))
+
+# Panel B: AI visits as % of total untrustworthy visits
+# Build from existing ai_proportion_2024 / ai_proportion_2020
+talk_ai_share_combined <- bind_rows(
+  tibble(year = "2020", mean = ai_proportion_2020$proportion,
+         low = ai_proportion_2020$low, high = ai_proportion_2020$high),
+  tibble(year = "2024", mean = ai_proportion_2024$proportion,
+         low = ai_proportion_2024$low, high = ai_proportion_2024$high)
+)
+
+talk_panel_b <- ggplot(talk_ai_share_combined,
+       aes(x = year, y = mean, ymin = low, ymax = high)) +
+  geom_pointrange(size = 1, color = "black", fatten = 3) +
+  scale_y_continuous(labels = scales::percent_format(),
+                     limits = c(0, max(talk_ai_share_combined$high) * 1.1)) +
+  labs(x = "Election Year",
+       y = "AI Visits as % of Total\nUntrustworthy Visits",
+       title = "") +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14))
+
+(talk_panel_a | talk_panel_b) + plot_annotation(tag_levels = 'A', theme = theme(plot.tag = element_text(size = 18, face = "bold")))
+ggsave("../figures/ai_exposure_two_panel.pdf", width = 12, height = 6)
+```
+
+```{r talk_ai_demographic_contrast}
+# ── Figure: Demographic Contrast — Non-AI vs AI Exposure (for talks) ──────
+# Recompute all 8 data points fresh to avoid variable-name collisions
+
+# Helper: compute weighted mean + SE for a subgroup
+talk_compute_exposure <- function(data, group_filter, outcome_var) {
+  sub <- data %>% filter(!!rlang::sym(group_filter) == 1)
+  tibble(
+    wmean = diagis::weighted_mean(x = sub[[outcome_var]], w = sub$weight),
+    wse   = diagis::weighted_se(x = sub[[outcome_var]], w = sub$weight)
+  )
+}
+
+# Age: 65+ and 18-29 × Non-AI and AI
+talk_age65_nonai <- talk_compute_exposure(main_2024, "age_65_plus", "untrustworthy_flag")
+talk_age65_ai    <- talk_compute_exposure(main_2024, "age_65_plus", "ai_untrustworthy_flag")
+talk_age18_nonai <- talk_compute_exposure(main_2024, "age_18_29",   "untrustworthy_flag")
+talk_age18_ai    <- talk_compute_exposure(main_2024, "age_18_29",   "ai_untrustworthy_flag")
+
+# Party: Republican and Democrat × Non-AI and AI
+talk_rep_nonai <- talk_compute_exposure(main_2024, "republican", "untrustworthy_flag")
+talk_rep_ai    <- talk_compute_exposure(main_2024, "republican", "ai_untrustworthy_flag")
+talk_dem_nonai <- talk_compute_exposure(main_2024, "democrat",   "untrustworthy_flag")
+talk_dem_ai    <- talk_compute_exposure(main_2024, "democrat",   "ai_untrustworthy_flag")
+
+talk_demo_data <- tribble(
+  ~panel,  ~group,       ~type,                        ~wmean,                  ~wse,
+  "Age",   "65+",        "Non-AI\nUntrustworthy",      talk_age65_nonai$wmean,  talk_age65_nonai$wse,
+  "Age",   "65+",        "AI-Generated\nUntrustworthy", talk_age65_ai$wmean,    talk_age65_ai$wse,
+  "Age",   "18-29",      "Non-AI\nUntrustworthy",      talk_age18_nonai$wmean,  talk_age18_nonai$wse,
+  "Age",   "18-29",      "AI-Generated\nUntrustworthy", talk_age18_ai$wmean,    talk_age18_ai$wse,
+  "Party", "Republican",  "Non-AI\nUntrustworthy",      talk_rep_nonai$wmean,   talk_rep_nonai$wse,
+  "Party", "Republican",  "AI-Generated\nUntrustworthy", talk_rep_ai$wmean,     talk_rep_ai$wse,
+  "Party", "Democrat",    "Non-AI\nUntrustworthy",      talk_dem_nonai$wmean,   talk_dem_nonai$wse,
+  "Party", "Democrat",    "AI-Generated\nUntrustworthy", talk_dem_ai$wmean,     talk_dem_ai$wse
+) %>%
+  mutate(low  = wmean - 1.96 * wse,
+         high = wmean + 1.96 * wse,
+         type = factor(type, levels = c("Non-AI\nUntrustworthy", "AI-Generated\nUntrustworthy")))
+
+# ── Significance tests: weighted t-tests for each within-type comparison ──
+# Age: 65+ vs 18-29, Non-AI
+talk_ttest_age_nonai <- weights::wtd.t.test(
+  x = main_2024 %>% filter(age_65_plus == 1) %>% pull(untrustworthy_flag),
+  y = main_2024 %>% filter(age_18_29 == 1) %>% pull(untrustworthy_flag),
+  weight = main_2024 %>% filter(age_65_plus == 1) %>% pull(weight),
+  weighty = main_2024 %>% filter(age_18_29 == 1) %>% pull(weight)
+)
+# Age: 65+ vs 18-29, AI
+talk_ttest_age_ai <- weights::wtd.t.test(
+  x = main_2024 %>% filter(age_65_plus == 1) %>% pull(ai_untrustworthy_flag),
+  y = main_2024 %>% filter(age_18_29 == 1) %>% pull(ai_untrustworthy_flag),
+  weight = main_2024 %>% filter(age_65_plus == 1) %>% pull(weight),
+  weighty = main_2024 %>% filter(age_18_29 == 1) %>% pull(weight)
+)
+# Party: Rep vs Dem, Non-AI
+talk_ttest_party_nonai <- weights::wtd.t.test(
+  x = main_2024 %>% filter(republican == 1) %>% pull(untrustworthy_flag),
+  y = main_2024 %>% filter(democrat == 1) %>% pull(untrustworthy_flag),
+  weight = main_2024 %>% filter(republican == 1) %>% pull(weight),
+  weighty = main_2024 %>% filter(democrat == 1) %>% pull(weight)
+)
+# Party: Rep vs Dem, AI
+talk_ttest_party_ai <- weights::wtd.t.test(
+  x = main_2024 %>% filter(republican == 1) %>% pull(ai_untrustworthy_flag),
+  y = main_2024 %>% filter(democrat == 1) %>% pull(ai_untrustworthy_flag),
+  weight = main_2024 %>% filter(republican == 1) %>% pull(weight),
+  weighty = main_2024 %>% filter(democrat == 1) %>% pull(weight)
+)
+
+# Format p-values for display
+talk_format_p <- function(p) {
+  if (p < 0.001) return("p < .001")
+  if (p < 0.01)  return(paste0("p = ", formatC(p, format = "f", digits = 3)))
+  if (p < 0.05)  return(paste0("p = ", formatC(p, format = "f", digits = 2)))
+  return(paste0("p = ", formatC(p, format = "f", digits = 2)))
+}
+
+talk_p_age_nonai  <- talk_format_p(talk_ttest_age_nonai$coefficients["p.value"])
+talk_p_age_ai     <- talk_format_p(talk_ttest_age_ai$coefficients["p.value"])
+talk_p_party_nonai <- talk_format_p(talk_ttest_party_nonai$coefficients["p.value"])
+talk_p_party_ai   <- talk_format_p(talk_ttest_party_ai$coefficients["p.value"])
+
+# Bracket y-positions: just above the highest CI at each x-position
+talk_age_data <- talk_demo_data %>% filter(panel == "Age")
+talk_party_data <- talk_demo_data %>% filter(panel == "Party")
+
+talk_bracket_age_nonai_y <- max(talk_age_data %>% filter(type == "Non-AI\nUntrustworthy") %>% pull(high)) * 1.10
+talk_bracket_age_ai_y    <- max(talk_age_data %>% filter(type == "AI-Generated\nUntrustworthy") %>% pull(high)) * 1.10
+talk_bracket_party_nonai_y <- max(talk_party_data %>% filter(type == "Non-AI\nUntrustworthy") %>% pull(high)) * 1.10
+talk_bracket_party_ai_y    <- max(talk_party_data %>% filter(type == "AI-Generated\nUntrustworthy") %>% pull(high)) * 1.10
+
+# Age panel: x = content type, color = age group
+talk_age_panel <- ggplot(talk_age_data,
+       aes(x = type, y = wmean, ymin = low, ymax = high, color = group)) +
+  geom_pointrange(position = position_dodge(width = 0.5), size = 1, fatten = 3) +
+  geom_signif(
+    annotations = c(talk_p_age_nonai, talk_p_age_ai),
+    xmin = c(0.875, 1.875), xmax = c(1.125, 2.125),
+    y_position = c(talk_bracket_age_nonai_y, talk_bracket_age_ai_y),
+    tip_length = 0.015, textsize = 4.5, color = "grey60"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(),
+                     expand = expansion(mult = c(0.05, 0.18))) +
+  scale_color_manual(values = c("65+" = "black", "18-29" = "grey50")) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "bottom",
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14)) +
+  labs(x = "", y = "Percentage Exposed", title = "", color = "Age")
+
+# Party panel: x = content type, color = party
+talk_party_panel <- ggplot(talk_party_data,
+       aes(x = type, y = wmean, ymin = low, ymax = high, color = group)) +
+  geom_pointrange(position = position_dodge(width = 0.5), size = 1, fatten = 3) +
+  geom_signif(
+    annotations = c(talk_p_party_nonai, talk_p_party_ai),
+    xmin = c(0.875, 1.875), xmax = c(1.125, 2.125),
+    y_position = c(talk_bracket_party_nonai_y, talk_bracket_party_ai_y),
+    tip_length = 0.015, textsize = 4.5, color = "grey60"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(),
+                     expand = expansion(mult = c(0.05, 0.18))) +
+  scale_color_manual(values = c("Republican" = "black", "Democrat" = "grey50")) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "bottom",
+        axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14)) +
+  labs(x = "", y = "Percentage Exposed", title = "", color = "Party")
+
+(talk_age_panel | talk_party_panel) + plot_annotation(tag_levels = 'A', theme = theme(plot.tag = element_text(size = 18, face = "bold")))
+
+ggsave("../figures/ai_demographic_contrast.pdf", width = 10, height = 6)
+```
 
 
 ## 4.3 AI Time Spent Analysis (H9)
@@ -2626,8 +3382,9 @@ se_val <- round(as.numeric(h10_age_ttest$additional["Std. Err"]) * 100, 1)
 ci_low <- round(diff_val - 1.96 * se_val, 1)
 ci_high <- round(diff_val + 1.96 * se_val, 1)
 
-# t and p
+# t, df, and p
 t_val <- round(h10_age_ttest$coefficients["t.value"], 2)
+df_val <- round(h10_age_ttest$coefficients["df"], 0)
 p_val <- h10_age_ttest$coefficients["p.value"]
 
 # Pooled SD and Cohen's d
@@ -2645,18 +3402,20 @@ cohens_d_ai <- ifelse(sd_pooled_ai == 0 | is.na(sd_pooled_ai), NA, round(as.nume
 # Final summary table with CIs in a second column
 h10_stats_table <- tibble::tibble(
   Statistic = c(
-    "Mean Exposure (65+)", 
-    "Mean Exposure (18–29)", 
-    "Difference (65+ - 18–29)", 
-    "t-value", 
-    "p-value", 
-    "SE", 
+    "Mean Exposure (65+)",
+    "Mean Exposure (18–29)",
+    "Difference (65+ - 18–29)",
+    "df",
+    "t-value",
+    "p-value",
+    "SE",
     "Cohen's d"
   ),
   `Value` = c(
     paste0(mean_65, "%"),
     paste0(mean_18, "%"),
     paste0(diff_val, "%"),
+    as.character(df_val),
     t_val,
     ifelse(p_val < 0.001, "< 0.001", format.pval(p_val, digits = 3)),
     paste0(se_val, "%"),
@@ -2666,7 +3425,7 @@ h10_stats_table <- tibble::tibble(
     paste0("[", ci_65_low, "%, ", ci_65_high, "%]"),
     paste0("[", ci_18_low, "%, ", ci_18_high, "%]"),
     paste0("[", ci_low, "%, ", ci_high, "%]"),
-    NA, NA, NA, NA
+    NA, NA, NA, NA, NA
   )
 )
 
@@ -2716,8 +3475,9 @@ se_val <- round(as.numeric(h11_party_ttest$additional["Std. Err"]) * 100, 1)
 ci_low <- round(diff_val - 1.96 * se_val, 1)
 ci_high <- round(diff_val + 1.96 * se_val, 1)
 
-# t and p
+# t, df, and p
 t_val <- round(h11_party_ttest$coefficients["t.value"], 2)
+df_val <- round(h11_party_ttest$coefficients["df"], 0)
 p_val <- h11_party_ttest$coefficients["p.value"]
 
 # Pooled SD and Cohen's d
@@ -2735,18 +3495,20 @@ cohens_d_party_ai <- round(as.numeric(h11_party_ttest$additional["Difference"]) 
 # Final summary table with values and 95% CIs
 h11_stats_table <- tibble::tibble(
   Statistic = c(
-    "Mean Exposure (Republican)", 
-    "Mean Exposure (Democrat)", 
-    "Difference (Rep - Dem)", 
-    "t-value", 
-    "p-value", 
-    "SE", 
+    "Mean Exposure (Republican)",
+    "Mean Exposure (Democrat)",
+    "Difference (Rep - Dem)",
+    "df",
+    "t-value",
+    "p-value",
+    "SE",
     "Cohen's d"
   ),
   `Value` = c(
     paste0(mean_rep, "%"),
     paste0(mean_dem, "%"),
     paste0(diff_val, "%"),
+    as.character(df_val),
     t_val,
     ifelse(p_val < 0.001, "< 0.001", format.pval(p_val, digits = 3)),
     paste0(se_val, "%"),
@@ -2756,12 +3518,241 @@ h11_stats_table <- tibble::tibble(
     paste0("[", ci_rep_low, "%, ", ci_rep_high, "%]"),
     paste0("[", ci_dem_low, "%, ", ci_dem_high, "%]"),
     paste0("[", ci_low, "%, ", ci_high, "%]"),
-    NA, NA, NA, NA
+    NA, NA, NA, NA, NA
   )
 )
 
-knitr::kable(h11_stats_table, 
-             caption = "H11: One-Tailed Test Comparing Exposure to AI-Generated Untrustworthy Websites (Republicans vs. Democrats) with 95% Confidence Intervals", 
+knitr::kable(h11_stats_table,
+             caption = "H11: One-Tailed Test Comparing Exposure to AI-Generated Untrustworthy Websites (Republicans vs. Democrats) with 95% Confidence Intervals",
+             format = "markdown")
+```
+
+## 4.5 Combined General + AI Untrustworthy Exposure (S26)
+
+The general untrustworthy (2,573 domains) and AI-generated untrustworthy (810 UAINS domains) lists are mutually exclusive — no domain appears on both lists. This chunk computes topline metrics for the combined list to show what exposure looks like when both categories are pooled.
+
+```{r combined_any_exposure_metrics}
+# ── Combined (General + AI) Untrustworthy Exposure Metrics ──────────────────
+# For SM S26: Domain list overlap clarification
+
+# --- 2024 ---
+
+# 1. % exposed (combined)
+combined_exposure_2024 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = main_2024$combined_any_flag, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$combined_any_flag, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# 2. Intensity among exposed (combined)
+exposed_combined_2024 <- main_2024 %>% filter(combined_any_flag == 1)
+combined_intensity_2024 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = exposed_combined_2024$combined_any_n, w = exposed_combined_2024$weight),
+  se = diagis::weighted_se(x = exposed_combined_2024$combined_any_n, w = exposed_combined_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# 3. % of all visits (combined)
+combined_pct_all_2024 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = main_2024$percentage_visits_combined_any, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$percentage_visits_combined_any, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# 4. % of news visits (combined)
+combined_pct_news_2024 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = main_2024$pct_news_combined_any, w = main_2024$weight),
+  se = diagis::weighted_se(x = main_2024$pct_news_combined_any, w = main_2024$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# --- 2020 ---
+
+# 1. % exposed (combined)
+combined_exposure_2020 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = main_2020$combined_any_flag, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$combined_any_flag, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# 2. Intensity among exposed (combined)
+exposed_combined_2020 <- main_2020 %>% filter(combined_any_flag == 1)
+combined_intensity_2020 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = exposed_combined_2020$combined_any_n, w = exposed_combined_2020$weight),
+  se = diagis::weighted_se(x = exposed_combined_2020$combined_any_n, w = exposed_combined_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# 3. % of all visits (combined)
+combined_pct_all_2020 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = main_2020$percentage_visits_combined_any, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$percentage_visits_combined_any, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# 4. % of news visits (combined)
+combined_pct_news_2020 <- tibble::tibble(
+  mean = diagis::weighted_mean(x = main_2020$pct_news_combined_any, w = main_2020$weight),
+  se = diagis::weighted_se(x = main_2020$pct_news_combined_any, w = main_2020$weight)
+) %>% mutate(low = mean - se * 1.96, high = mean + se * 1.96)
+
+# --- Summary Table ---
+combined_any_summary <- tibble::tibble(
+  Metric = rep(c("% Exposed", "Mean Visits (Among Exposed)", "% of All Visits", "% of News Visits"), 2),
+  Year = c(rep("2024", 4), rep("2020", 4)),
+  Estimate = c(
+    scales::percent(combined_exposure_2024$mean, accuracy = 0.1),
+    round(combined_intensity_2024$mean, 1),
+    sprintf("%.3f%%", combined_pct_all_2024$mean * 100),
+    sprintf("%.2f%%", combined_pct_news_2024$mean * 100),
+    scales::percent(combined_exposure_2020$mean, accuracy = 0.1),
+    round(combined_intensity_2020$mean, 1),
+    sprintf("%.3f%%", combined_pct_all_2020$mean * 100),
+    sprintf("%.2f%%", combined_pct_news_2020$mean * 100)
+  ),
+  `95% CI` = c(
+    paste0("[", scales::percent(combined_exposure_2024$low, accuracy = 0.1), ", ", scales::percent(combined_exposure_2024$high, accuracy = 0.1), "]"),
+    paste0("[", round(combined_intensity_2024$low, 1), ", ", round(combined_intensity_2024$high, 1), "]"),
+    paste0("[", sprintf("%.3f%%", combined_pct_all_2024$low * 100), ", ", sprintf("%.3f%%", combined_pct_all_2024$high * 100), "]"),
+    paste0("[", sprintf("%.2f%%", combined_pct_news_2024$low * 100), ", ", sprintf("%.2f%%", combined_pct_news_2024$high * 100), "]"),
+    paste0("[", scales::percent(combined_exposure_2020$low, accuracy = 0.1), ", ", scales::percent(combined_exposure_2020$high, accuracy = 0.1), "]"),
+    paste0("[", round(combined_intensity_2020$low, 1), ", ", round(combined_intensity_2020$high, 1), "]"),
+    paste0("[", sprintf("%.3f%%", combined_pct_all_2020$low * 100), ", ", sprintf("%.3f%%", combined_pct_all_2020$high * 100), "]"),
+    paste0("[", sprintf("%.2f%%", combined_pct_news_2020$low * 100), ", ", sprintf("%.2f%%", combined_pct_news_2020$high * 100), "]")
+  )
+)
+
+knitr::kable(combined_any_summary,
+             caption = "S26: Combined General + AI Untrustworthy Exposure (Mutually Exclusive Lists Pooled)",
+             format = "markdown")
+```
+
+```{r combined_any_2024_vs_2020_tests}
+# ── 2024 vs 2020 Comparisons for Combined Exposure (Nature reporting) ───────
+# Each metric: weighted t-test, Cohen's d, 95% CIs
+
+# 1. % Exposed comparison
+combined_exp_test <- weights::wtd.t.test(
+  x = main_2024$combined_any_flag, weight = main_2024$weight,
+  y = main_2020$combined_any_flag, weighty = main_2020$weight
+)
+sd_exp_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$combined_any_flag, weights = main_2024$weight))
+sd_exp_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$combined_any_flag, weights = main_2020$weight))
+pooled_sd_exp <- sqrt((sd_exp_2024^2 + sd_exp_2020^2) / 2)
+cohens_d_exp <- (combined_exp_test$additional[["Mean.x"]] - combined_exp_test$additional[["Mean.y"]]) / pooled_sd_exp
+
+# Difference CI
+diff_exp <- combined_exposure_2024$mean - combined_exposure_2020$mean
+diff_se_exp <- sqrt(combined_exposure_2024$se^2 + combined_exposure_2020$se^2)
+
+# 2. Intensity among exposed comparison
+combined_int_test <- weights::wtd.t.test(
+  x = exposed_combined_2024$combined_any_n, weight = exposed_combined_2024$weight,
+  y = exposed_combined_2020$combined_any_n, weighty = exposed_combined_2020$weight
+)
+sd_int_2024 <- sqrt(Hmisc::wtd.var(x = exposed_combined_2024$combined_any_n, weights = exposed_combined_2024$weight))
+sd_int_2020 <- sqrt(Hmisc::wtd.var(x = exposed_combined_2020$combined_any_n, weights = exposed_combined_2020$weight))
+pooled_sd_int <- sqrt((sd_int_2024^2 + sd_int_2020^2) / 2)
+cohens_d_int <- (combined_int_test$additional[["Mean.x"]] - combined_int_test$additional[["Mean.y"]]) / pooled_sd_int
+
+# Difference CI
+diff_int <- combined_intensity_2024$mean - combined_intensity_2020$mean
+diff_se_int <- sqrt(combined_intensity_2024$se^2 + combined_intensity_2020$se^2)
+
+# 3. % of all visits comparison
+combined_pct_all_test <- weights::wtd.t.test(
+  x = main_2024$percentage_visits_combined_any, weight = main_2024$weight,
+  y = main_2020$percentage_visits_combined_any, weighty = main_2020$weight
+)
+sd_pct_all_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$percentage_visits_combined_any, weights = main_2024$weight))
+sd_pct_all_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$percentage_visits_combined_any, weights = main_2020$weight))
+pooled_sd_pct_all <- sqrt((sd_pct_all_2024^2 + sd_pct_all_2020^2) / 2)
+cohens_d_pct_all <- (combined_pct_all_test$additional[["Mean.x"]] - combined_pct_all_test$additional[["Mean.y"]]) / pooled_sd_pct_all
+
+# Difference CI
+diff_pct_all <- combined_pct_all_2024$mean - combined_pct_all_2020$mean
+diff_se_pct_all <- sqrt(combined_pct_all_2024$se^2 + combined_pct_all_2020$se^2)
+
+# 4. % of news visits comparison
+combined_pct_news_test <- weights::wtd.t.test(
+  x = main_2024$pct_news_combined_any, weight = main_2024$weight,
+  y = main_2020$pct_news_combined_any, weighty = main_2020$weight
+)
+sd_pct_news_2024 <- sqrt(Hmisc::wtd.var(x = main_2024$pct_news_combined_any, weights = main_2024$weight))
+sd_pct_news_2020 <- sqrt(Hmisc::wtd.var(x = main_2020$pct_news_combined_any, weights = main_2020$weight))
+pooled_sd_pct_news <- sqrt((sd_pct_news_2024^2 + sd_pct_news_2020^2) / 2)
+cohens_d_pct_news <- (combined_pct_news_test$additional[["Mean.x"]] - combined_pct_news_test$additional[["Mean.y"]]) / pooled_sd_pct_news
+
+# Difference CI
+diff_pct_news <- combined_pct_news_2024$mean - combined_pct_news_2020$mean
+diff_se_pct_news <- sqrt(combined_pct_news_2024$se^2 + combined_pct_news_2020$se^2)
+
+# --- Full comparison table ---
+combined_comparison_table <- tibble::tibble(
+  Metric = c("% Exposed", "Mean Visits (Among Exposed)", "% of All Visits", "% of News Visits"),
+  `2024 [95% CI]` = c(
+    paste0(scales::percent(combined_exposure_2024$mean, accuracy = 0.1),
+           " [", scales::percent(combined_exposure_2024$low, accuracy = 0.1), ", ",
+           scales::percent(combined_exposure_2024$high, accuracy = 0.1), "]"),
+    paste0(round(combined_intensity_2024$mean, 1),
+           " [", round(combined_intensity_2024$low, 1), ", ",
+           round(combined_intensity_2024$high, 1), "]"),
+    paste0(sprintf("%.3f%%", combined_pct_all_2024$mean * 100),
+           " [", sprintf("%.3f%%", combined_pct_all_2024$low * 100), ", ",
+           sprintf("%.3f%%", combined_pct_all_2024$high * 100), "]"),
+    paste0(sprintf("%.2f%%", combined_pct_news_2024$mean * 100),
+           " [", sprintf("%.2f%%", combined_pct_news_2024$low * 100), ", ",
+           sprintf("%.2f%%", combined_pct_news_2024$high * 100), "]")
+  ),
+  `2020 [95% CI]` = c(
+    paste0(scales::percent(combined_exposure_2020$mean, accuracy = 0.1),
+           " [", scales::percent(combined_exposure_2020$low, accuracy = 0.1), ", ",
+           scales::percent(combined_exposure_2020$high, accuracy = 0.1), "]"),
+    paste0(round(combined_intensity_2020$mean, 1),
+           " [", round(combined_intensity_2020$low, 1), ", ",
+           round(combined_intensity_2020$high, 1), "]"),
+    paste0(sprintf("%.3f%%", combined_pct_all_2020$mean * 100),
+           " [", sprintf("%.3f%%", combined_pct_all_2020$low * 100), ", ",
+           sprintf("%.3f%%", combined_pct_all_2020$high * 100), "]"),
+    paste0(sprintf("%.2f%%", combined_pct_news_2020$mean * 100),
+           " [", sprintf("%.2f%%", combined_pct_news_2020$low * 100), ", ",
+           sprintf("%.2f%%", combined_pct_news_2020$high * 100), "]")
+  ),
+  `Diff [95% CI]` = c(
+    paste0(sprintf("%.1f%%", diff_exp * 100),
+           " [", sprintf("%.1f%%", (diff_exp - 1.96 * diff_se_exp) * 100), ", ",
+           sprintf("%.1f%%", (diff_exp + 1.96 * diff_se_exp) * 100), "]"),
+    paste0(round(diff_int, 1),
+           " [", round(diff_int - 1.96 * diff_se_int, 1), ", ",
+           round(diff_int + 1.96 * diff_se_int, 1), "]"),
+    paste0(sprintf("%.3f%%", diff_pct_all * 100),
+           " [", sprintf("%.3f%%", (diff_pct_all - 1.96 * diff_se_pct_all) * 100), ", ",
+           sprintf("%.3f%%", (diff_pct_all + 1.96 * diff_se_pct_all) * 100), "]"),
+    paste0(sprintf("%.2f%%", diff_pct_news * 100),
+           " [", sprintf("%.2f%%", (diff_pct_news - 1.96 * diff_se_pct_news) * 100), ", ",
+           sprintf("%.2f%%", (diff_pct_news + 1.96 * diff_se_pct_news) * 100), "]")
+  ),
+  `n (2024)` = c(nrow(main_2024), nrow(exposed_combined_2024), nrow(main_2024), nrow(main_2024)),
+  `n (2020)` = c(nrow(main_2020), nrow(exposed_combined_2020), nrow(main_2020), nrow(main_2020)),
+  `t(df)` = c(
+    sprintf("t(%.0f) = %.2f", combined_exp_test$coefficients["df"], combined_exp_test$coefficients["t.value"]),
+    sprintf("t(%.0f) = %.2f", combined_int_test$coefficients["df"], combined_int_test$coefficients["t.value"]),
+    sprintf("t(%.0f) = %.2f", combined_pct_all_test$coefficients["df"], combined_pct_all_test$coefficients["t.value"]),
+    sprintf("t(%.0f) = %.2f", combined_pct_news_test$coefficients["df"], combined_pct_news_test$coefficients["t.value"])
+  ),
+  p = c(
+    ifelse(combined_exp_test$coefficients["p.value"] < 0.001, "< 0.001",
+           sprintf("%.3f", combined_exp_test$coefficients["p.value"])),
+    ifelse(combined_int_test$coefficients["p.value"] < 0.001, "< 0.001",
+           sprintf("%.3f", combined_int_test$coefficients["p.value"])),
+    ifelse(combined_pct_all_test$coefficients["p.value"] < 0.001, "< 0.001",
+           sprintf("%.3f", combined_pct_all_test$coefficients["p.value"])),
+    ifelse(combined_pct_news_test$coefficients["p.value"] < 0.001, "< 0.001",
+           sprintf("%.3f", combined_pct_news_test$coefficients["p.value"]))
+  ),
+  `Cohen's d` = c(
+    round(cohens_d_exp, 3),
+    round(cohens_d_int, 3),
+    round(cohens_d_pct_all, 3),
+    round(cohens_d_pct_news, 3)
+  )
+)
+
+knitr::kable(combined_comparison_table,
+             caption = "S26: Combined (General + AI) Untrustworthy Exposure — 2024 vs. 2020 Comparison",
              format = "markdown")
 ```
 
@@ -2886,10 +3877,13 @@ ci_2024 <- confint(model_untrustworthy_2024)
 h4_p <- coef_2024["age_65_plus", "Pr(>|t|)"]
 h5_p <- coef_2024["republican", "Pr(>|t|)"]
 
-# Create the table content as text - exactly matching the paper format
-cat("\\begin{table}[ht]\n")
-cat("\\caption{Who chooses to visit untrustworthy news websites}\n")
-cat("\\label{tab:untrustworthy_model}\n")
+# Create the table content as text - exactly matching the Nature paper format
+# Also write to file for SM inclusion
+sink("../tables/sm_table_s2.tex")
+cat("\\begin{table}[H]\n")
+cat("\\centering\n")
+cat("\\caption{Who chooses to visit general untrustworthy news websites}\n")
+cat("\\label{tab:sm_untrustworthy_model}\n")
 cat("\\begin{tabular}{llll}\n")
 cat("\\hline\n")
 cat(" & \\multicolumn{3}{l}{Exposure to at least one untrustworthy website (binary)} \\\\ \n")
@@ -2974,6 +3968,7 @@ cat(sprintf("$N$ & %d & %d & %d \\\\ \n",
 cat("\\hline\n")
 cat("\\end{tabular}\n")
 cat("\\end{table}\n")
+sink()
 ```
 
 ### 5.1.2 Age Variance Analysis
@@ -3136,9 +4131,12 @@ h10_p <- coef_2024["age_65_plus", "Pr(>|t|)"]
 h11_p <- coef_2024["republican", "Pr(>|t|)"]
 
 # Create the table content as text - exactly matching the Nature paper format
-cat("\\begin{table}[ht]\n")
+# Also write to file for SM inclusion
+sink("../tables/sm_table_s3.tex")
+cat("\\begin{table}[H]\n")
+cat("\\centering\n")
 cat("\\caption{Who chooses to visit AI-generated untrustworthy news websites}\n")
-cat("\\label{tab:ai_model}\n")
+cat("\\label{tab:sm_ai_model}\n")
 cat("\\begin{tabular}{lll}\n")
 cat("\\hline\n")
 cat(" & \\multicolumn{2}{l}{Exposure to at least one AI-generated untrustworthy website (binary)} \\\\ \n")
@@ -3211,11 +4209,94 @@ cat(sprintf("$N$ & %d & %d \\\\ \n",
 cat("\\hline\n")
 cat("\\end{tabular}\n")
 cat("\\end{table}\n")
+sink()
+```
+
+### 5.2.1 Combined Coefficient Plot (Figure 3)
+
+```{r coefficient-plot, fig.width=10, fig.height=5}
+# Combined coefficient plot summarizing Tables 1 & 2
+# Extracts coefficients from all 5 regression models defined above
+
+extract_coefs <- function(model, year, outcome) {
+  coefs <- summary(model)$coefficients
+  cis <- confint(model)
+
+  tibble(
+    term = rownames(coefs),
+    estimate = coefs[, "Estimate"],
+    se = coefs[, "Std. Error"],
+    p_value = coefs[, "Pr(>|t|)"],
+    ci_low = cis[, 1],
+    ci_high = cis[, 2],
+    year = year,
+    outcome = outcome
+  ) %>%
+    filter(term != "(Intercept)")
+}
+
+coef_df <- bind_rows(
+  extract_coefs(model_untrustworthy_2016, "2016", "A. General Untrustworthy"),
+  extract_coefs(model_untrustworthy_2020, "2020", "A. General Untrustworthy"),
+  extract_coefs(model_untrustworthy_2024, "2024", "A. General Untrustworthy"),
+  extract_coefs(model_ai_2020, "2020", "B. AI-Generated Untrustworthy"),
+  extract_coefs(model_ai_2024, "2024", "B. AI-Generated Untrustworthy")
+)
+
+# Factor year: reversed so 2016 appears on top in dodge order
+coef_df <- coef_df %>%
+  mutate(year = factor(year, levels = c("2024", "2020", "2016")))
+
+coef_df <- coef_df %>%
+  mutate(
+    term_label = case_when(
+      term == "republican" ~ "Republican",
+      term == "political_interest" ~ "Political Interest",
+      term == "college" ~ "College",
+      term == "female" ~ "Female",
+      term == "non_white" ~ "Non-White",
+      term == "age_30_44" ~ "Age 30-44",
+      term == "age_45_64" ~ "Age 45-64",
+      term == "age_65_plus" ~ "Age 65+",
+      TRUE ~ term
+    ),
+    significant = ifelse(p_value < 0.05, "p < 0.05", "p >= 0.05")
+  ) %>%
+  mutate(term_label = factor(term_label, levels = rev(c(
+    "Republican", "Political Interest", "College", "Female",
+    "Non-White", "Age 30-44", "Age 45-64", "Age 65+"
+  ))))
+
+year_colors <- c("2016" = "#E64B35FF", "2020" = "#4DBBD5FF", "2024" = "#00A087FF")
+sig_shapes <- c("p < 0.05" = 16, "p >= 0.05" = 1)
+
+coefficient_plot <- ggplot(coef_df, aes(x = estimate, y = term_label,
+                                         color = year, shape = significant)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high),
+                  position = position_dodge(width = 0.5),
+                  size = 0.4) +
+  facet_wrap(~ outcome, scales = "free_x") +
+  scale_color_manual(values = year_colors, drop = FALSE) +
+  scale_shape_manual(values = sig_shapes) +
+  guides(color = guide_legend(order = 1, reverse = TRUE),
+         shape = guide_legend(order = 2)) +
+  labs(x = "Coefficient", y = NULL, color = "Year", shape = "Significance") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        strip.text = element_text(size = 12, face = "bold"),
+        strip.background = element_rect(fill = "white"),
+        legend.position = "bottom")
+
+print(coefficient_plot)
+
+ggsave("../figures/coefficient-plot.pdf", coefficient_plot, width = 10, height = 5)
 ```
 
 \newpage
 
-# 5.5. Multiple Testing Correction
+## 5.5 Multiple Testing Correction
 
 This section applies multiple testing correction to the pre-registered hypotheses to control for family-wise error rate when testing multiple related hypotheses.
 
@@ -3242,6 +4323,7 @@ hypothesis_pvalues <- c(
 )
 
 # Apply multiple testing corrections
+# n = 14: total pre-registered hypotheses (H1a/b, H2a/b, H3a/b, H4-H11)
 holm_adjusted <- p.adjust(hypothesis_pvalues, n = 14, method = "holm")
 bonferroni_adjusted <- p.adjust(hypothesis_pvalues, n = 14, method = "bonferroni")
 
@@ -3292,7 +4374,7 @@ multiple_testing_results$bonferroni_adjusted_p_formatted <- ifelse(
 
 # Print summary
 cat("Multiple Testing Correction Summary:\n")
-cat("Total pre-registered hypotheses tested:", length(hypothesis_pvalues), "\n")
+cat("Total pre-registered hypotheses: 14\n")
 cat("Originally significant (p < 0.05):", sum(hypothesis_pvalues < 0.05), "\n")
 cat("Significant after Holm correction:", sum(holm_adjusted < 0.05), "\n")
 cat("Significant after Bonferroni correction:", sum(bonferroni_adjusted < 0.05), "\n\n")
@@ -3310,6 +4392,331 @@ kable(
   align = c("l", "l", "r", "r", "r", "c", "c")
 ) %>%
   kable_styling(latex_options = c("scale_down", "hold_position"))
+```
+
+**Statistical Note:** Multiple testing correction was applied to the `r length(hypothesis_pvalues)` pre-registered hypotheses to control the family-wise error rate. The Holm-Bonferroni method provides a less conservative adjustment than the standard Bonferroni correction while still maintaining strong control over Type I error. For hypotheses H4, H5, H10, and H11, regression p-values from the omnibus models were used as these represent the pre-registered analytical approach that controls for potential confounding variables.
+
+\newpage
+
+## 5.6 Ideological Composition of Untrustworthy Domains
+
+SUPPLY-SIDE COMPOSITION REQUIRES NEWSGUARD'S PROPRIETARY DOMAIN RATINGS, WHICH WE ARE CONTRACTUALLY PROHIBITED FROM REDISTRIBUTING.
+
+```{r ideology_composition_demand}
+# ============================================================
+# DEMAND: Topline metrics by domain ideology (from person-level CSV)
+# ============================================================
+
+# Verification: ideology-specific counts sum to total
+stopifnot(all(main_2024$right_untrustworthy_n + main_2024$left_untrustworthy_n +
+              main_2024$unclassified_untrustworthy_n == main_2024$untrustworthy_n))
+
+cat("=== DEMAND: Topline Metrics by Domain Ideology ===\n\n")
+
+# % Exposed
+for (ideo in c("right", "left")) {
+  flag_col <- paste0(ideo, "_untrustworthy_flag")
+  m <- diagis::weighted_mean(x = main_2024[[flag_col]], w = main_2024$weight) * 100
+  se <- diagis::weighted_se(x = main_2024[[flag_col]], w = main_2024$weight) * 100
+  cat(sprintf("%s-leaning: %.1f%% exposed (95%% CI [%.1f%%, %.1f%%])\n",
+              tools::toTitleCase(ideo), m, m - 1.96*se, m + 1.96*se))
+}
+
+# Visits among exposed
+cat("\nVisits among exposed:\n")
+for (ideo in c("right", "left")) {
+  flag_col <- paste0(ideo, "_untrustworthy_flag")
+  n_col <- paste0(ideo, "_untrustworthy_n")
+  exposed <- main_2024 %>% filter(!!sym(flag_col) == 1)
+  m <- diagis::weighted_mean(x = exposed[[n_col]], w = exposed$weight)
+  se <- diagis::weighted_se(x = exposed[[n_col]], w = exposed$weight)
+  cat(sprintf("  %s-leaning: %.1f visits (95%% CI [%.1f, %.1f]), n=%d\n",
+              tools::toTitleCase(ideo), m, m - 1.96*se, m + 1.96*se, nrow(exposed)))
+}
+
+# % of total web visits
+cat("\n% of total web visits:\n")
+for (ideo in c("right", "left")) {
+  col <- paste0("percentage_visits_", ideo, "_untrustworthy")
+  m <- diagis::weighted_mean(x = main_2024[[col]], w = main_2024$weight) * 100
+  se <- diagis::weighted_se(x = main_2024[[col]], w = main_2024$weight) * 100
+  cat(sprintf("  %s-leaning: %.4f%% (95%% CI [%.4f%%, %.4f%%])\n",
+              tools::toTitleCase(ideo), m, m - 1.96*se, m + 1.96*se))
+}
+
+# % of news visits
+cat("\n% of news visits:\n")
+for (ideo in c("right", "left")) {
+  col <- paste0("pct_news_", ideo, "_untrustworthy")
+  m <- diagis::weighted_mean(x = main_2024[[col]], w = main_2024$weight) * 100
+  se <- diagis::weighted_se(x = main_2024[[col]], w = main_2024$weight) * 100
+  cat(sprintf("  %s-leaning: %.2f%% (95%% CI [%.2f%%, %.2f%%])\n",
+              tools::toTitleCase(ideo), m, m - 1.96*se, m + 1.96*se))
+}
+
+# Verification: decomposed metrics sum to originals
+v_pct_total <- diagis::weighted_mean(
+  x = main_2024$percentage_visits_right_untrustworthy +
+      main_2024$percentage_visits_left_untrustworthy +
+      ifelse(main_2024$total_visits > 0,
+             main_2024$unclassified_untrustworthy_n / main_2024$total_visits, 0),
+  w = main_2024$weight)
+v_pct_total_orig <- diagis::weighted_mean(
+  x = main_2024$percentage_visits_untrustworthy, w = main_2024$weight)
+cat(sprintf("\nVerification (pct_total): sum=%.6f vs original=%.6f (match: %s)\n",
+    v_pct_total, v_pct_total_orig, abs(v_pct_total - v_pct_total_orig) < 1e-10))
+
+# Supply vs demand share (among classified visits)
+total_right <- sum(main_2024$right_untrustworthy_n)
+total_left <- sum(main_2024$left_untrustworthy_n)
+demand_right_pct <- 100 * total_right / (total_right + total_left)
+demand_left_pct <- 100 * total_left / (total_right + total_left)
+cat(sprintf("\nDemand (classified visits): Right = %d (%.1f%%), Left = %d (%.1f%%)\n",
+    total_right, demand_right_pct, total_left, demand_left_pct))
+```
+
+```{r ideology_partisan_moderated}
+# ============================================================
+# PARTISAN-MODERATED: Exposure by party × domain ideology
+# ============================================================
+
+rep_data <- main_2024 %>% filter(republican == 1) %>% drop_na(weight)
+dem_data <- main_2024 %>% filter(democrat == 1) %>% drop_na(weight)
+
+cat("=== PARTISAN-MODERATED: Right-leaning Untrustworthy ===\n\n")
+
+# % Exposed to Right-leaning: Rep vs Dem
+for (party_label in c("Republican", "Democrat")) {
+  d <- if (party_label == "Republican") rep_data else dem_data
+  m <- diagis::weighted_mean(x = d$right_untrustworthy_flag, w = d$weight) * 100
+  se <- diagis::weighted_se(x = d$right_untrustworthy_flag, w = d$weight) * 100
+  cat(sprintf("  %s: %.1f%% exposed (95%% CI [%.1f%%, %.1f%%]), n=%d\n",
+              party_label, m, m - 1.96*se, m + 1.96*se, nrow(d)))
+
+  # Visits among exposed
+  exposed <- d %>% filter(right_untrustworthy_flag == 1)
+  if (nrow(exposed) > 2) {
+    m_vis <- diagis::weighted_mean(x = exposed$right_untrustworthy_n, w = exposed$weight)
+    se_vis <- diagis::weighted_se(x = exposed$right_untrustworthy_n, w = exposed$weight)
+    cat(sprintf("    Visits among exposed: %.1f (95%% CI [%.1f, %.1f]), n=%d\n",
+                m_vis, m_vis - 1.96*se_vis, m_vis + 1.96*se_vis, nrow(exposed)))
+  }
+
+  # % of news visits
+  m_news <- diagis::weighted_mean(x = d$pct_news_right_untrustworthy, w = d$weight) * 100
+  se_news <- diagis::weighted_se(x = d$pct_news_right_untrustworthy, w = d$weight) * 100
+  cat(sprintf("    %% of news visits: %.2f%% (95%% CI [%.2f%%, %.2f%%])\n",
+              m_news, m_news - 1.96*se_news, m_news + 1.96*se_news))
+}
+
+# T-test: Right-leaning exposure, Rep vs Dem
+t_right <- weights::wtd.t.test(
+  x = rep_data$right_untrustworthy_flag, weight = rep_data$weight,
+  y = dem_data$right_untrustworthy_flag, weighty = dem_data$weight
+)
+
+sd_rep_r <- sqrt(Hmisc::wtd.var(x = rep_data$right_untrustworthy_flag, weights = rep_data$weight))
+sd_dem_r <- sqrt(Hmisc::wtd.var(x = dem_data$right_untrustworthy_flag, weights = dem_data$weight))
+pooled_sd_r <- sqrt((sd_rep_r^2 + sd_dem_r^2) / 2)
+d_right <- t_right$additional["Difference"] / pooled_sd_r
+
+cat(sprintf("\nT-test (Right-leaning, Rep vs Dem): t(%.0f) = %.2f, p = %.4f, Cohen's d = %.2f\n",
+    t_right$coefficients["df"], t_right$coefficients["t.value"], t_right$coefficients["p.value"], d_right))
+
+cat("\n=== PARTISAN-MODERATED: Left-leaning Untrustworthy ===\n\n")
+
+# % Exposed to Left-leaning: Rep vs Dem
+for (party_label in c("Republican", "Democrat")) {
+  d <- if (party_label == "Republican") rep_data else dem_data
+  m <- diagis::weighted_mean(x = d$left_untrustworthy_flag, w = d$weight) * 100
+  se <- diagis::weighted_se(x = d$left_untrustworthy_flag, w = d$weight) * 100
+  cat(sprintf("  %s: %.1f%% exposed (95%% CI [%.1f%%, %.1f%%]), n=%d\n",
+              party_label, m, m - 1.96*se, m + 1.96*se, nrow(d)))
+
+  # Visits among exposed
+  exposed <- d %>% filter(left_untrustworthy_flag == 1)
+  if (nrow(exposed) > 2) {
+    m_vis <- diagis::weighted_mean(x = exposed$left_untrustworthy_n, w = exposed$weight)
+    se_vis <- diagis::weighted_se(x = exposed$left_untrustworthy_n, w = exposed$weight)
+    cat(sprintf("    Visits among exposed: %.1f (95%% CI [%.1f, %.1f]), n=%d\n",
+                m_vis, m_vis - 1.96*se_vis, m_vis + 1.96*se_vis, nrow(exposed)))
+  }
+
+  # % of news visits
+  m_news <- diagis::weighted_mean(x = d$pct_news_left_untrustworthy, w = d$weight) * 100
+  se_news <- diagis::weighted_se(x = d$pct_news_left_untrustworthy, w = d$weight) * 100
+  cat(sprintf("    %% of news visits: %.2f%% (95%% CI [%.2f%%, %.2f%%])\n",
+              m_news, m_news - 1.96*se_news, m_news + 1.96*se_news))
+}
+
+# T-test: Left-leaning exposure, Rep vs Dem
+t_left <- weights::wtd.t.test(
+  x = rep_data$left_untrustworthy_flag, weight = rep_data$weight,
+  y = dem_data$left_untrustworthy_flag, weighty = dem_data$weight
+)
+
+sd_rep_l <- sqrt(Hmisc::wtd.var(x = rep_data$left_untrustworthy_flag, weights = rep_data$weight))
+sd_dem_l <- sqrt(Hmisc::wtd.var(x = dem_data$left_untrustworthy_flag, weights = dem_data$weight))
+pooled_sd_l <- sqrt((sd_rep_l^2 + sd_dem_l^2) / 2)
+d_left <- t_left$additional["Difference"] / pooled_sd_l
+
+cat(sprintf("\nT-test (Left-leaning, Rep vs Dem): t(%.0f) = %.2f, p = %.4f, Cohen's d = %.2f\n",
+    t_left$coefficients["df"], t_left$coefficients["t.value"], t_left$coefficients["p.value"], d_left))
+
+# T-test: % of news visits to Right-leaning, Rep vs Dem
+t_news_r <- weights::wtd.t.test(
+  x = rep_data$pct_news_right_untrustworthy, weight = rep_data$weight,
+  y = dem_data$pct_news_right_untrustworthy, weighty = dem_data$weight
+)
+sd_rep_nr <- sqrt(Hmisc::wtd.var(x = rep_data$pct_news_right_untrustworthy, weights = rep_data$weight))
+sd_dem_nr <- sqrt(Hmisc::wtd.var(x = dem_data$pct_news_right_untrustworthy, weights = dem_data$weight))
+pooled_sd_nr <- sqrt((sd_rep_nr^2 + sd_dem_nr^2) / 2)
+d_news_r <- t_news_r$additional["Difference"] / pooled_sd_nr
+
+cat(sprintf("\nT-test (%% news Right-leaning, Rep vs Dem): t(%.0f) = %.2f, p = %.4f, Cohen's d = %.2f\n",
+    t_news_r$coefficients["df"], t_news_r$coefficients["t.value"], t_news_r$coefficients["p.value"], d_news_r))
+
+# T-test: % of news visits to Left-leaning, Rep vs Dem
+t_news_l <- weights::wtd.t.test(
+  x = rep_data$pct_news_left_untrustworthy, weight = rep_data$weight,
+  y = dem_data$pct_news_left_untrustworthy, weighty = dem_data$weight
+)
+sd_rep_nl <- sqrt(Hmisc::wtd.var(x = rep_data$pct_news_left_untrustworthy, weights = rep_data$weight))
+sd_dem_nl <- sqrt(Hmisc::wtd.var(x = dem_data$pct_news_left_untrustworthy, weights = dem_data$weight))
+pooled_sd_nl <- sqrt((sd_rep_nl^2 + sd_dem_nl^2) / 2)
+d_news_l <- t_news_l$additional["Difference"] / pooled_sd_nl
+
+cat(sprintf("\nT-test (%% news Left-leaning, Rep vs Dem): t(%.0f) = %.2f, p = %.4f, Cohen's d = %.2f\n",
+    t_news_l$coefficients["df"], t_news_l$coefficients["t.value"], t_news_l$coefficients["p.value"], d_news_l))
+```
+
+```{r ideology_composition_figure, fig.width=12, fig.height=5}
+# ============================================================
+# FIGURE: 3 dodged pointrange panels (A/B/C)
+# x = domain ideology, color = party, dodged
+# ============================================================
+
+ideology_colors <- c("Right-leaning" = "#F39B7FFF", "Left-leaning" = "#3C5488FF")
+
+# ---- Build data for all 3 panels (4 cells: 2 parties × 2 ideologies) ----
+panel_data <- list()
+for (party_label in c("Republicans", "Democrats")) {
+  d <- if (party_label == "Republicans") rep_data else dem_data
+  for (ideo in c("Right-leaning", "Left-leaning")) {
+    ideo_lower <- tolower(sub("-leaning", "", ideo))
+    flag_col <- paste0(ideo_lower, "_untrustworthy_flag")
+    n_col <- paste0(ideo_lower, "_untrustworthy_n")
+    pct_col <- paste0("pct_news_", ideo_lower, "_untrustworthy")
+
+    # Panel A: % exposed (full party sample)
+    m_exp <- diagis::weighted_mean(x = d[[flag_col]], w = d$weight)
+    se_exp <- diagis::weighted_se(x = d[[flag_col]], w = d$weight)
+
+    # Panel B: among exposed only
+    exposed <- d %>% filter(!!sym(flag_col) == 1)
+    if (nrow(exposed) > 1) {
+      m_vis <- diagis::weighted_mean(x = exposed[[n_col]], w = exposed$weight)
+      se_vis <- diagis::weighted_se(x = exposed[[n_col]], w = exposed$weight)
+      m_pct <- diagis::weighted_mean(x = exposed[[pct_col]], w = exposed$weight)
+      se_pct <- diagis::weighted_se(x = exposed[[pct_col]], w = exposed$weight)
+    } else {
+      m_vis <- NA; se_vis <- NA; m_pct <- NA; se_pct <- NA
+    }
+
+    panel_data[[length(panel_data) + 1]] <- tibble(
+      party = party_label, domain_ideology = ideo, n_exposed = nrow(exposed),
+      exp_mean = m_exp, exp_se = se_exp,
+      vis_mean = m_vis, vis_se = se_vis,
+      pct_mean = m_pct, pct_se = se_pct
+    )
+  }
+}
+panel_df <- bind_rows(panel_data)
+
+# ---- Panel A: % Exposed ----
+panel_a_df <- panel_df %>%
+  transmute(party, domain_ideology,
+            mean = exp_mean, low = exp_mean - 1.96 * exp_se, high = exp_mean + 1.96 * exp_se)
+
+panel_a <- ggplot(panel_a_df,
+       aes(x = party, y = mean, ymin = low, ymax = high, color = domain_ideology)) +
+  geom_pointrange(position = position_dodge(width = 0.5), size = 0.8, fatten = 2) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_color_manual(values = ideology_colors) +
+  labs(x = "Party Identification",
+       y = "Percentage Exposed",
+       title = "A",
+       color = "Domain Ideology") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "bottom")
+
+# ---- Panel B: Visits among exposed ----
+panel_b_df <- panel_df %>%
+  filter(!is.na(vis_mean)) %>%
+  transmute(party, domain_ideology, n_exposed,
+            mean = vis_mean, low = vis_mean - 1.96 * vis_se, high = vis_mean + 1.96 * vis_se)
+
+panel_b <- ggplot(panel_b_df,
+       aes(x = party, y = mean, ymin = low, ymax = high, color = domain_ideology)) +
+  geom_pointrange(position = position_dodge(width = 0.5), size = 0.8, fatten = 2) +
+  scale_color_manual(values = ideology_colors) +
+  labs(x = "Party Identification",
+       y = "Visits Among Exposed",
+       title = "B",
+       color = "Domain Ideology") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "bottom")
+
+# ---- Panel C: % of news visits (FULL sample, not among exposed) ----
+panel_c_df <- bind_rows(
+  tibble(
+    mean = diagis::weighted_mean(x = rep_data$pct_news_right_untrustworthy, w = rep_data$weight),
+    se = diagis::weighted_se(x = rep_data$pct_news_right_untrustworthy, w = rep_data$weight),
+    party = "Republicans", domain_ideology = "Right-leaning"
+  ),
+  tibble(
+    mean = diagis::weighted_mean(x = rep_data$pct_news_left_untrustworthy, w = rep_data$weight),
+    se = diagis::weighted_se(x = rep_data$pct_news_left_untrustworthy, w = rep_data$weight),
+    party = "Republicans", domain_ideology = "Left-leaning"
+  ),
+  tibble(
+    mean = diagis::weighted_mean(x = dem_data$pct_news_right_untrustworthy, w = dem_data$weight),
+    se = diagis::weighted_se(x = dem_data$pct_news_right_untrustworthy, w = dem_data$weight),
+    party = "Democrats", domain_ideology = "Right-leaning"
+  ),
+  tibble(
+    mean = diagis::weighted_mean(x = dem_data$pct_news_left_untrustworthy, w = dem_data$weight),
+    se = diagis::weighted_se(x = dem_data$pct_news_left_untrustworthy, w = dem_data$weight),
+    party = "Democrats", domain_ideology = "Left-leaning"
+  )
+) %>%
+  mutate(low = mean - 1.96 * se, high = mean + 1.96 * se)
+
+panel_c <- ggplot(panel_c_df,
+       aes(x = party, y = mean, ymin = low, ymax = high, color = domain_ideology)) +
+  geom_pointrange(position = position_dodge(width = 0.5), size = 0.8, fatten = 2) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_color_manual(values = ideology_colors) +
+  labs(x = "Party Identification",
+       y = "% of News Visits",
+       title = "C",
+       color = "Domain Ideology") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.position = "bottom")
+
+# Combine 3 panels side by side, shared legend
+ideology_figure <- (panel_a + panel_b + panel_c) +
+  plot_layout(ncol = 3, guides = "collect") &
+  theme(legend.position = "bottom", plot.margin = margin(5, 5, 5, 5))
+
+print(ideology_figure)
+ggsave("../figures/ideology_composition.pdf", ideology_figure, width = 12, height = 5)
 ```
 
 \newpage
@@ -3392,14 +4799,14 @@ cohens_d_credible <- (credible_exposure_diff$additional[["Mean.x"]] -
 
 # Create comprehensive statistical table
 credible_exposure_stats <- tibble(
-  Measure = c("2024 Exposure Rate", "2020 Exposure Rate", "Absolute Difference", 
-              "Relative Risk", "Cohen's d", "t-statistic", "p-value"),
+  Measure = c("2024 Exposure Rate", "2020 Exposure Rate", "Absolute Difference",
+              "Relative Risk", "Cohen's d", "df", "t-statistic", "p-value"),
   Value = c(
-    paste0(scales::percent(credible_exposure_2024$mean, accuracy = 0.1), 
-           " (95% CI: [", scales::percent(credible_exposure_2024$low, accuracy = 0.1), 
+    paste0(scales::percent(credible_exposure_2024$mean, accuracy = 0.1),
+           " (95% CI: [", scales::percent(credible_exposure_2024$low, accuracy = 0.1),
            ", ", scales::percent(credible_exposure_2024$high, accuracy = 0.1), "])"),
-    paste0(scales::percent(credible_exposure_2020$mean, accuracy = 0.1), 
-           " (95% CI: [", scales::percent(credible_exposure_2020$low, accuracy = 0.1), 
+    paste0(scales::percent(credible_exposure_2020$mean, accuracy = 0.1),
+           " (95% CI: [", scales::percent(credible_exposure_2020$low, accuracy = 0.1),
            ", ", scales::percent(credible_exposure_2020$high, accuracy = 0.1), "])"),
     paste0(scales::percent(credible_abs_diff, accuracy = 0.1),
            " (95% CI: [", scales::percent(credible_abs_diff_ci_low, accuracy = 0.1),
@@ -3408,6 +4815,7 @@ credible_exposure_stats <- tibble(
            "x (95% CI: [", round(credible_ratio_ci_low, 2),
            ", ", round(credible_ratio_ci_high, 2), "])"),
     as.character(round(cohens_d_credible, 3)),
+    as.character(round(credible_exposure_diff$coefficients["df"], 0)),
     as.character(round(credible_exposure_diff$coefficients[1], 2)),
     format.pval(credible_exposure_diff$coefficients[3], digits = 3)
   )
@@ -3502,23 +4910,24 @@ cohens_d_visits <- (credible_visits_diff$additional[["Mean.x"]] -
 # Create results table for visit frequency
 credible_visits_stats <- tibble(
   Measure = c("2024 Average Visits", "2020 Average Visits", "Absolute Difference",
-              "Cohen's d", "t-statistic", "p-value"),
+              "Cohen's d", "df", "t-statistic", "p-value"),
   Value = c(
-    paste0(round(credible_visits_2024$mean, 1), 
-           " (95% CI: [", round(credible_visits_2024$low, 1), 
+    paste0(round(credible_visits_2024$mean, 1),
+           " (95% CI: [", round(credible_visits_2024$low, 1),
            ", ", round(credible_visits_2024$high, 1), "])"),
-    paste0(round(credible_visits_2020$mean, 1), 
-           " (95% CI: [", round(credible_visits_2020$low, 1), 
+    paste0(round(credible_visits_2020$mean, 1),
+           " (95% CI: [", round(credible_visits_2020$low, 1),
            ", ", round(credible_visits_2020$high, 1), "])"),
     paste0(round(credible_visits_2024$mean - credible_visits_2020$mean, 1),
-           " (95% CI: [", 
-           round(credible_visits_2024$mean - credible_visits_2020$mean - 
+           " (95% CI: [",
+           round(credible_visits_2024$mean - credible_visits_2020$mean -
                  1.96 * sqrt(credible_visits_2024$se^2 + credible_visits_2020$se^2), 1),
            ", ",
-           round(credible_visits_2024$mean - credible_visits_2020$mean + 
+           round(credible_visits_2024$mean - credible_visits_2020$mean +
                  1.96 * sqrt(credible_visits_2024$se^2 + credible_visits_2020$se^2), 1),
            "])"),
     as.character(round(cohens_d_visits, 3)),
+    as.character(round(credible_visits_diff$coefficients["df"], 0)),
     as.character(round(credible_visits_diff$coefficients[1], 2)),
     format.pval(credible_visits_diff$coefficients[3], digits = 3)
   )
@@ -3561,6 +4970,7 @@ credible_misinfo_cor_result <- weights::wtd.cor(
 credible_misinfo_cor <- credible_misinfo_cor_result[1]  # Correlation coefficient
 credible_misinfo_t <- credible_misinfo_cor_result[3]    # t-statistic
 credible_misinfo_p <- credible_misinfo_cor_result[4]    # p-value
+credible_misinfo_df <- nrow(main_2024) - 2              # df = n - 2 for correlation
 
 # Calculate co-exposure rates
 co_exposure_rate <- diagis::weighted_mean(
@@ -3574,9 +4984,10 @@ co_exposure_se <- diagis::weighted_se(
 
 # Create relationship statistics table with explicit positioning
 relationship_stats <- tibble(
-  Measure = c("Correlation (visits)", "Correlation t-statistic", "Correlation p-value", "Co-exposure Rate"),
+  Measure = c("Correlation (visits)", "Correlation df", "Correlation t-statistic", "Correlation p-value", "Co-exposure Rate"),
   Value = c(
     paste0(round(credible_misinfo_cor, 3)),
+    as.character(credible_misinfo_df),
     paste0(round(credible_misinfo_t, 2)),
     format.pval(credible_misinfo_p, digits = 3),
     paste0(scales::percent(co_exposure_rate, accuracy = 0.1),
@@ -3608,7 +5019,524 @@ ggplot(main_2024, aes(x = hard_news_n, y = untrustworthy_n)) +
 ggsave("../figures/credible_misinfo_relationship.pdf", width = 8, height = 6)
 ```
 
-### 6.1.2 Demographic Predictors of Credible News Consumption
+### 6.1.2 Topical Composition and Browsing Ecology
+
+```{r topic_data_load}
+# Load topic-level person dataset produced by data engineering
+topic_exposure_2024 <- readRDS("../data/topic-exposure-2024.rds")
+
+# Verify structure
+stopifnot(all(c("caseid", "weight", "topic", "domain_type", "topic_flag", "topic_n") %in% names(topic_exposure_2024)))
+cat(sprintf("Loaded %d rows: %d participants × %d topics × %d domain types\n",
+            nrow(topic_exposure_2024),
+            n_distinct(topic_exposure_2024$caseid),
+            n_distinct(topic_exposure_2024$topic),
+            n_distinct(topic_exposure_2024$domain_type)))
+```
+
+```{r topic_exposure_metrics}
+# Compute weighted exposure metrics for each topic × domain_type
+# Uses group_modify for safe handling of small cells
+compute_topic_metrics <- function(df, ...) {
+  exposed <- df %>% filter(topic_flag == 1)
+  tibble(
+    pct_exposed = diagis::weighted_mean(x = df$topic_flag, w = df$weight),
+    pct_exposed_se = diagis::weighted_se(x = df$topic_flag, w = df$weight),
+    n_exposed = nrow(exposed),
+    n_total = nrow(df),
+    visits_mean = if (nrow(exposed) >= 5) diagis::weighted_mean(x = exposed$topic_n, w = exposed$weight) else NA_real_,
+    visits_se = if (nrow(exposed) >= 5) diagis::weighted_se(x = exposed$topic_n, w = exposed$weight) else NA_real_
+  )
+}
+
+topic_metrics <- topic_exposure_2024 %>%
+  group_by(topic, domain_type) %>%
+  group_modify(compute_topic_metrics) %>%
+  ungroup() %>%
+  mutate(
+    pct_exposed_low = pct_exposed - 1.96 * pct_exposed_se,
+    pct_exposed_high = pct_exposed + 1.96 * pct_exposed_se,
+    visits_low = visits_mean - 1.96 * visits_se,
+    visits_high = visits_mean + 1.96 * visits_se
+  )
+
+# Display untrustworthy topic metrics
+cat("\nUntrustworthy exposure by topic (weighted):\n")
+topic_metrics %>%
+  filter(domain_type == "untrustworthy") %>%
+  arrange(desc(pct_exposed)) %>%
+  transmute(topic,
+            pct = sprintf("%.1f%% (95%% CI [%.1f%%, %.1f%%])",
+                         pct_exposed * 100, pct_exposed_low * 100, pct_exposed_high * 100),
+            n_exposed,
+            visits = sprintf("%.1f (95%% CI [%.1f, %.1f])",
+                           visits_mean, visits_low, visits_high)) %>%
+  print(n = 25)
+
+# Display credible news topic metrics
+cat("\nCredible news exposure by topic (weighted):\n")
+topic_metrics %>%
+  filter(domain_type == "hard_news") %>%
+  arrange(desc(pct_exposed)) %>%
+  transmute(topic,
+            pct = sprintf("%.1f%% (95%% CI [%.1f%%, %.1f%%])",
+                         pct_exposed * 100, pct_exposed_low * 100, pct_exposed_high * 100),
+            n_exposed,
+            visits = sprintf("%.1f (95%% CI [%.1f, %.1f])",
+                           visits_mean, visits_low, visits_high)) %>%
+  print(n = 25)
+```
+
+```{r topic_share_figure, fig.width=10, fig.height=7}
+# Topic shares — what % of credible news / untrustworthy visits go to each topic?
+# For each person × domain_type: topic_n / total visits to that domain_type
+# Weighted mean across all exposed participants
+
+# Compute person-level totals for each domain_type
+person_totals <- topic_exposure_2024 %>%
+  filter(domain_type %in% c("hard_news", "untrustworthy")) %>%
+  group_by(caseid, domain_type) %>%
+  summarise(total_domain_visits = sum(topic_n), .groups = "drop")
+
+# Join back to get topic shares
+topic_shares <- topic_exposure_2024 %>%
+  filter(domain_type %in% c("hard_news", "untrustworthy")) %>%
+  inner_join(person_totals, by = c("caseid", "domain_type")) %>%
+  mutate(topic_share = ifelse(total_domain_visits > 0, topic_n / total_domain_visits, 0))
+
+# Compute weighted mean share per topic × domain_type (among exposed to that domain_type)
+topic_share_metrics <- topic_shares %>%
+  filter(total_domain_visits > 0) %>%
+  group_by(topic, domain_type) %>%
+  summarise(
+    share_mean = diagis::weighted_mean(x = topic_share, w = weight),
+    share_se = diagis::weighted_se(x = topic_share, w = weight),
+    n_exposed = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    share_low = share_mean - 1.96 * share_se,
+    share_high = share_mean + 1.96 * share_se,
+    domain_type_label = factor(
+      ifelse(domain_type == "hard_news", "Credible News", "Untrustworthy"),
+      levels = c("Credible News", "Untrustworthy")
+    )
+  )
+
+cat("\nTopic share of consumption (among exposed):\n")
+topic_share_metrics %>%
+  arrange(domain_type, desc(share_mean)) %>%
+  transmute(domain_type, topic,
+            share = sprintf("%.1f%% [%.1f%%, %.1f%%]", share_mean * 100, share_low * 100, share_high * 100),
+            n_exposed) %>%
+  print(n = 50)
+
+# Figure: Topic shares — same style as topic_composition_figure
+npg_all <- ggsci::pal_npg()(10)
+type_colors <- c("Credible News" = npg_all[6], "Untrustworthy" = npg_all[7])
+
+# Order by credible news share
+topic_share_order <- topic_share_metrics %>%
+  filter(domain_type == "hard_news") %>%
+  arrange(desc(share_mean)) %>%
+  pull(topic)
+
+topic_share_metrics <- topic_share_metrics %>%
+  mutate(topic = factor(topic, levels = topic_share_order))
+
+topic_share_figure <- ggplot(topic_share_metrics,
+       aes(x = topic, y = share_mean * 100, ymin = share_low * 100,
+           ymax = share_high * 100, color = domain_type_label)) +
+  geom_pointrange(position = position_dodge(width = 0.4), size = 0.8, linewidth = 0.8) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_color_manual(values = type_colors) +
+  labs(x = "", y = "% of Domain Type Visits", color = "") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.text.x = element_text(size = 9, angle = 45, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 11),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10))
+
+print(topic_share_figure)
+ggsave("../figures/topic_share_of_consumption.pdf", topic_share_figure, width = 14, height = 8)
+```
+
+```{r topic_composition_figure, fig.width=10, fig.height=7}
+# Figure: Topic composition comparison — credible news vs untrustworthy
+# Two-panel VERTICAL pointrange matching paper style
+
+# Explicit named color vector — NPG colors 6 and 7 to avoid conflict with year colors
+npg_all <- ggsci::pal_npg()(10)
+type_colors <- c("Credible News" = npg_all[6], "Untrustworthy" = npg_all[7])
+
+# Filter to hard_news and untrustworthy (show all topics, not just mutual n>=5)
+plot_data <- topic_metrics %>%
+  filter(domain_type %in% c("hard_news", "untrustworthy")) %>%
+  mutate(
+    domain_type_label = factor(
+      ifelse(domain_type == "hard_news", "Credible News", "Untrustworthy"),
+      levels = c("Credible News", "Untrustworthy")
+    )
+  )
+
+# Order topics by credible news exposure rate (highest first, left to right)
+topic_order <- topic_metrics %>%
+  filter(domain_type == "hard_news") %>%
+  arrange(desc(pct_exposed)) %>%
+  pull(topic)
+plot_data <- plot_data %>%
+  mutate(topic = factor(topic, levels = topic_order))
+
+# Panel A: % Exposed by topic
+panel_a <- ggplot(plot_data,
+       aes(x = topic, y = pct_exposed * 100, ymin = pct_exposed_low * 100,
+           ymax = pct_exposed_high * 100, color = domain_type_label)) +
+  geom_pointrange(position = position_dodge(width = 0.4), size = 0.8, linewidth = 0.8) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_color_manual(values = type_colors) +
+  labs(x = "", y = "% Exposed", title = "A", color = "") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.text.x = element_text(size = 9, angle = 45, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 11),
+        plot.title = element_text(size = 13, face = "bold"),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10))
+
+# Panel B: Visits among exposed
+plot_data_b <- plot_data %>% filter(!is.na(visits_mean))
+
+panel_b <- ggplot(plot_data_b,
+       aes(x = topic, y = visits_mean, ymin = visits_low, ymax = visits_high,
+           color = domain_type_label)) +
+  geom_pointrange(position = position_dodge(width = 0.4), size = 0.8, linewidth = 0.8) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_color_manual(values = type_colors) +
+  labs(x = "", y = "Visits Among Exposed", title = "B", color = "") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.text.x = element_text(size = 9, angle = 45, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 11),
+        plot.title = element_text(size = 13, face = "bold"),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10))
+
+# Combine with patchwork
+topic_figure <- (panel_a / panel_b) +
+  plot_layout(ncol = 1, guides = "collect") &
+  theme(legend.position = "bottom")
+
+print(topic_figure)
+ggsave("../figures/topic_composition.pdf", topic_figure, width = 14, height = 10)
+```
+
+```{r topic_sm_tables, results='asis'}
+# SM Tables: Full topic metrics for credible news and untrustworthy
+
+# Credible news topics table
+hard_news_table <- topic_metrics %>%
+  filter(domain_type == "hard_news") %>%
+  arrange(desc(pct_exposed)) %>%
+  transmute(
+    Topic = topic,
+    `\\% Exposed [95\\% CI]` = sprintf("%.1f\\%% [%.1f\\%%, %.1f\\%%]",
+                                    pct_exposed * 100, pct_exposed_low * 100, pct_exposed_high * 100),
+    `N Exposed` = n_exposed,
+    `Visits Among Exposed [95\\% CI]` = ifelse(!is.na(visits_mean),
+                                sprintf("%.1f [%.1f, %.1f]", visits_mean, visits_low, visits_high),
+                                "---")
+  )
+
+cat("\\FloatBarrier\n")
+print(knitr::kable(hard_news_table, format = "latex", booktabs = TRUE, escape = FALSE,
+  caption = "Topical composition of credible news exposure (2024). Topics assigned by NewsGuard. Visits computed among exposed participants only (n $\\geq$ 5; topics with fewer than five exposed participants are not shown due to unstable estimates). All estimates survey-weighted. Because domains can be assigned multiple topics, a single visit may contribute to multiple topic categories; topic-level exposure rates do not sum to the overall rate.") %>%
+  kableExtra::kable_styling(latex_options = c("HOLD_position"), font_size = 9))
+
+```
+
+```{r topic_sm_tables_untrustworthy, results='asis'}
+# Untrustworthy topics table
+untrustworthy_table <- topic_metrics %>%
+  filter(domain_type == "untrustworthy") %>%
+  arrange(desc(pct_exposed)) %>%
+  transmute(
+    Topic = topic,
+    `\\% Exposed [95\\% CI]` = sprintf("%.1f\\%% [%.1f\\%%, %.1f\\%%]",
+                                    pct_exposed * 100, pct_exposed_low * 100, pct_exposed_high * 100),
+    `N Exposed` = n_exposed,
+    `Visits Among Exposed [95\\% CI]` = ifelse(!is.na(visits_mean),
+                                sprintf("%.1f [%.1f, %.1f]", visits_mean, visits_low, visits_high),
+                                "---")
+  )
+
+print(knitr::kable(untrustworthy_table, format = "latex", booktabs = TRUE, escape = FALSE,
+  caption = "Topical composition of untrustworthy website exposure (2024). Topics assigned by NewsGuard. Visits computed among exposed participants only (n $\\geq$ 5; topics with fewer than five exposed participants are not shown due to unstable estimates). All estimates survey-weighted. Because domains can be assigned multiple topics, a single visit may contribute to multiple topic categories; topic-level exposure rates do not sum to the overall rate.") %>%
+  kableExtra::kable_styling(latex_options = c("HOLD_position"), font_size = 9))
+```
+
+```{r behavioral_overlap_analysis}
+# Behavioral overlap — are hard news and untrustworthy consumers the same people?
+
+# Part A: Aggregate 2x2 co-exposure cross-tab
+co_exposure_2x2 <- main_2024 %>%
+  mutate(
+    profile = case_when(
+      hard_news_flag == 1 & untrustworthy_flag == 1 ~ "Both",
+      hard_news_flag == 1 & untrustworthy_flag == 0 ~ "Credible Only",
+      hard_news_flag == 0 & untrustworthy_flag == 1 ~ "Untrustworthy Only",
+      TRUE ~ "Neither"
+    )
+  )
+
+# Weighted proportions for each profile
+profile_stats <- co_exposure_2x2 %>%
+  group_by(profile) %>%
+  summarise(
+    n = n(),
+    weighted_pct = diagis::weighted_mean(x = rep(1, n()), w = weight) * 0, # placeholder
+    .groups = "drop"
+  )
+
+# Compute weighted proportions properly
+for (p in c("Both", "Credible Only", "Untrustworthy Only", "Neither")) {
+  indicator <- as.integer(co_exposure_2x2$profile == p)
+  profile_stats$weighted_pct[profile_stats$profile == p] <-
+    diagis::weighted_mean(x = indicator, w = co_exposure_2x2$weight)
+  profile_stats$weighted_se[profile_stats$profile == p] <-
+    diagis::weighted_se(x = indicator, w = co_exposure_2x2$weight)
+}
+
+profile_stats <- profile_stats %>%
+  mutate(
+    pct_low = weighted_pct - 1.96 * weighted_se,
+    pct_high = weighted_pct + 1.96 * weighted_se
+  )
+
+cat("\n2x2 Co-exposure profile (weighted):\n")
+print(profile_stats %>%
+  transmute(Profile = profile, n,
+            `Weighted %` = sprintf("%.1f%% [%.1f%%, %.1f%%]",
+                                   weighted_pct * 100, pct_low * 100, pct_high * 100)))
+
+# Conditional rates
+# Of those exposed to untrustworthy, what % also visited credible news?
+exposed_untrust <- main_2024 %>% filter(untrustworthy_flag == 1)
+cond_untrust_to_credible <- diagis::weighted_mean(
+  x = exposed_untrust$hard_news_flag, w = exposed_untrust$weight)
+cond_untrust_to_credible_se <- diagis::weighted_se(
+  x = exposed_untrust$hard_news_flag, w = exposed_untrust$weight)
+
+# Of those exposed to credible news, what % also visited untrustworthy?
+exposed_credible <- main_2024 %>% filter(hard_news_flag == 1)
+cond_credible_to_untrust <- diagis::weighted_mean(
+  x = exposed_credible$untrustworthy_flag, w = exposed_credible$weight)
+cond_credible_to_untrust_se <- diagis::weighted_se(
+  x = exposed_credible$untrustworthy_flag, w = exposed_credible$weight)
+
+cat(sprintf("\nOf untrustworthy-exposed: %.1f%% also visited credible news (95%% CI [%.1f%%, %.1f%%])\n",
+  cond_untrust_to_credible * 100,
+  (cond_untrust_to_credible - 1.96 * cond_untrust_to_credible_se) * 100,
+  (cond_untrust_to_credible + 1.96 * cond_untrust_to_credible_se) * 100))
+cat(sprintf("Of credible-news-exposed: %.1f%% also visited untrustworthy (95%% CI [%.1f%%, %.1f%%])\n",
+  cond_credible_to_untrust * 100,
+  (cond_credible_to_untrust - 1.96 * cond_credible_to_untrust_se) * 100,
+  (cond_credible_to_untrust + 1.96 * cond_credible_to_untrust_se) * 100))
+```
+
+```{r topic_coexposure}
+# Part B: Topic-level co-exposure rates
+# For each topic: weighted % who visited BOTH hard_news and untrustworthy domains with that topic
+
+# Reshape to wide: one row per person x topic, with flags for each domain_type
+topic_wide <- topic_exposure_2024 %>%
+  filter(domain_type %in% c("hard_news", "untrustworthy")) %>%
+  select(caseid, weight, topic, domain_type, topic_flag) %>%
+  pivot_wider(
+    names_from = domain_type,
+    values_from = topic_flag,
+    values_fill = 0L
+  )
+
+# For each topic, compute co-exposure rate
+topic_coexposure <- topic_wide %>%
+  mutate(both_flag = as.integer(hard_news > 0 & untrustworthy > 0)) %>%
+  group_by(topic) %>%
+  summarise(
+    co_exposure_rate = diagis::weighted_mean(x = both_flag, w = weight),
+    co_exposure_se = diagis::weighted_se(x = both_flag, w = weight),
+    n_both = sum(both_flag),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    co_exposure_low = co_exposure_rate - 1.96 * co_exposure_se,
+    co_exposure_high = co_exposure_rate + 1.96 * co_exposure_se
+  ) %>%
+  filter(topic != "Unclassified")  # drop Unclassified, keep all classified topics
+
+cat("\nTopic-level co-exposure rates (credible news AND untrustworthy):\n")
+topic_coexposure %>%
+  arrange(desc(co_exposure_rate)) %>%
+  transmute(topic,
+            rate = sprintf("%.1f%% (95%% CI [%.1f%%, %.1f%%])",
+                          co_exposure_rate * 100, co_exposure_low * 100, co_exposure_high * 100),
+            n_both) %>%
+  print(n = 25)
+```
+
+```{r topic_coexposure_figure, fig.width=12, fig.height=6}
+# Figure: Topic-level co-exposure rates (all topics)
+topic_coexposure_plot <- topic_coexposure %>%
+  mutate(topic = fct_reorder(factor(topic), desc(co_exposure_rate)))
+
+coexposure_figure <- ggplot(topic_coexposure_plot,
+       aes(x = topic, y = co_exposure_rate * 100,
+           ymin = co_exposure_low * 100, ymax = co_exposure_high * 100)) +
+  geom_pointrange(color = "black", size = 0.8, linewidth = 0.8) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 15)) +
+  labs(x = "",
+       y = "Co-Exposure Rate (%)\n(Visited Both Credible News and Untrustworthy Sites)") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.text.x = element_text(size = 9, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.y = element_text(size = 11))
+
+print(coexposure_figure)
+ggsave("../figures/topic_coexposure.pdf", coexposure_figure, width = 12, height = 6)
+```
+
+```{r topic_correlation_heatmap, fig.width=11, fig.height=9}
+# Figure: Correlation heatmap — untrustworthy topics × credible news topics
+
+# Pivot to wide: one row per participant, columns = domain_type_topic
+untrust_wide <- topic_exposure_2024 %>%
+  filter(domain_type == "untrustworthy") %>%
+  select(caseid, topic, topic_n) %>%
+  pivot_wider(names_from = topic, values_from = topic_n, names_prefix = "untrust_")
+
+hardnews_wide <- topic_exposure_2024 %>%
+  filter(domain_type == "hard_news") %>%
+  select(caseid, topic, topic_n) %>%
+  pivot_wider(names_from = topic, values_from = topic_n, names_prefix = "hn_")
+
+# Join and add weights
+cor_data <- untrust_wide %>%
+  inner_join(hardnews_wide, by = "caseid") %>%
+  inner_join(main_2024 %>% select(caseid, weight), by = "caseid")
+
+# Get topic names
+untrust_topics <- sort(unique(topic_exposure_2024$topic[topic_exposure_2024$domain_type == "untrustworthy"]))
+hn_topics <- sort(unique(topic_exposure_2024$topic[topic_exposure_2024$domain_type == "hard_news"]))
+
+# Compute weighted correlations using weights::wtd.cor
+cor_matrix <- matrix(NA, nrow = length(untrust_topics), ncol = length(hn_topics),
+                     dimnames = list(untrust_topics, hn_topics))
+
+for (i in seq_along(untrust_topics)) {
+  for (j in seq_along(hn_topics)) {
+    x_col <- paste0("untrust_", untrust_topics[i])
+    y_col <- paste0("hn_", hn_topics[j])
+    if (x_col %in% names(cor_data) & y_col %in% names(cor_data)) {
+      x_vals <- cor_data[[x_col]]
+      y_vals <- cor_data[[y_col]]
+      if (sd(x_vals, na.rm = TRUE) > 0 & sd(y_vals, na.rm = TRUE) > 0) {
+        cor_result <- weights::wtd.cor(x_vals, y_vals, weight = cor_data$weight)
+        cor_matrix[i, j] <- cor_result[1, 1]
+      } else {
+        cor_matrix[i, j] <- 0
+      }
+    }
+  }
+}
+
+# Drop Unclassified from both axes
+keep_rows <- setdiff(rownames(cor_matrix), "Unclassified")
+keep_cols <- setdiff(colnames(cor_matrix), "Unclassified")
+cor_matrix_filtered <- cor_matrix[keep_rows, keep_cols, drop = FALSE]
+
+# Set zero correlations to NA so they render as white
+cor_matrix_filtered[cor_matrix_filtered == 0] <- NA
+
+# Convert to long format for ggplot
+cor_long <- as.data.frame(as.table(cor_matrix_filtered)) %>%
+  rename(untrustworthy_topic = Var1, credible_news_topic = Var2, correlation = Freq) %>%
+  mutate(
+    untrustworthy_topic = str_wrap(as.character(untrustworthy_topic), width = 20),
+    credible_news_topic = str_wrap(as.character(credible_news_topic), width = 20)
+  )
+
+# Same alphabetical topic order on both axes
+all_topic_labels <- sort(unique(c(
+  as.character(cor_long$untrustworthy_topic),
+  as.character(cor_long$credible_news_topic)
+)))
+
+cor_long <- cor_long %>%
+  mutate(
+    untrustworthy_topic = factor(untrustworthy_topic, levels = rev(all_topic_labels)),
+    credible_news_topic = factor(credible_news_topic, levels = all_topic_labels)
+  )
+
+heatmap_figure <- ggplot(cor_long, aes(x = credible_news_topic, y = untrustworthy_topic,
+                                        fill = correlation)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_gradient2(low = "#4DBBD5FF", mid = "white", high = "#E64B35FF",
+                       midpoint = 0, limits = c(-0.15, 0.65),
+                       na.value = "white",
+                       name = "Weighted\nCorrelation") +
+  labs(x = "Credible News Topic", y = "Untrustworthy Topic") +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 11))
+
+print(heatmap_figure)
+ggsave("../figures/topic_correlation_heatmap.pdf", heatmap_figure, width = 11, height = 9)
+
+# Extract full correlation stats (r, SE, t, p, CI) for key pairs cited in SM text
+key_pairs <- list(
+  c("Political news or commentary", "Political news or commentary"),
+  c("General News", "General News"),
+  c("Health or medical information", "Health or medical information"),
+  c("Conspiracy theories or hoaxes", "Political news or commentary"),
+  c("Health or medical information", "Political news or commentary")
+)
+
+n_cor <- nrow(cor_data)
+cat("\n=== Key correlation pairs ===\n")
+for (pair in key_pairs) {
+  x_col <- paste0("untrust_", pair[1])
+  y_col <- paste0("hn_", pair[2])
+  r_result <- weights::wtd.cor(cor_data[[x_col]], cor_data[[y_col]], weight = cor_data$weight)
+  r <- r_result[1, "correlation"]
+  t_val <- r_result[1, "t.value"]
+  p_val <- r_result[1, "p.value"]
+  # Fisher z-transform for 95% CI
+  z <- atanh(r)
+  z_se <- 1 / sqrt(n_cor - 3)
+  r_low <- tanh(z - 1.96 * z_se)
+  r_high <- tanh(z + 1.96 * z_se)
+  cor_df <- n_cor - 2
+  cat(sprintf("Untrust %-35s x Cred %-35s  r = %.2f, 95%% CI [%.2f, %.2f], t(%d) = %.2f, P = %.3f\n",
+    pair[1], pair[2], r, r_low, r_high, cor_df, t_val, p_val))
+}
+```
+
+### 6.1.3 Demographic Predictors of Credible News Consumption
 
 ```{r credible_news_demographics, results='asis'}
 # Force float barrier before analysis
@@ -3834,33 +5762,10 @@ stargazer(self_flag_basic, self_flag_full,
                              "Rep × Self", "Dem × Self", "Political Interest",
                              "College", "Female", "Non-White", "Age 30-44",
                              "Age 45-64", "Age 65+", "Constant"),
-         no.space = TRUE, star.cutoffs = c(.05, .01, .001))
+         no.space = TRUE, star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
-```{r results="asis"}
-# stargazer(others_flag_basic, others_flag_full, others_count_basic, others_count_full, others_pct_basic, others_pct_full,
-#         type = "latex", title = "Others-Assessment Models (7-Day Exposure)",
-#         column.labels = c("Flag Basic", "Flag Full", "Count Basic", "Count Full", "Pct Basic", "Pct Full"),
-#         dep.var.labels = c("Exposure Flag", "Visit Count", "Percentage"),
-#         covariate.labels = c("Republican", "Democrat", "Others-Assessment",
-#                             "Rep × Others", "Dem × Others", "Political Interest",
-#                             "College", "Female", "Non-White", "Age 30-44",
-#                             "Age 45-64", "Age 65+", "Constant"),
-#         no.space = TRUE, star.cutoffs = c(.05, .01, .001))
-```
-
-```{r results="asis"}
-# stargazer(gap_flag_basic, gap_flag_full, gap_count_basic, gap_count_full, gap_pct_basic, gap_pct_full,
-#         type = "latex", title = "Third-Person Gap Models (7-Day Exposure)",
-#         column.labels = c("Flag Basic", "Flag Full", "Count Basic", "Count Full", "Pct Basic", "Pct Full"),
-#         dep.var.labels = c("Exposure Flag", "Visit Count", "Percentage"),
-#         covariate.labels = c("Republican", "Democrat", "Third-Person Gap",
-#                             "Rep × Gap", "Dem × Gap", "Political Interest",
-#                             "College", "Female", "Non-White", "Age 30-44",
-#                             "Age 45-64", "Age 65+", "Constant"),
-#         no.space = TRUE, star.cutoffs = c(.05, .01, .001))
-
-```
 
 ```{r}
 # THREE-PANEL VISUALIZATION: Flag, Count, Percentage vs Self-Assessment
@@ -3929,10 +5834,8 @@ self_flag_full <- lm(untrustworthy_flag_7day ~ republican + democrat + false_new
                     age_30_44 + age_45_64 + age_65_plus,
                     data = main_2024, weights = weight)
 
-# Output regression table using stargazer for HTML
-library(stargazer)
 stargazer(self_flag_basic, self_flag_full,
-         type = "html",
+         type = "latex",
          title = "Regression Models Predicting Actual Untrustworthy Website Exposure by Self-Assessment",
          column.labels = c("Model 1 (Basic)", "Model 2 (Full)"),
          dep.var.labels = "Actual Untrustworthy Website Exposure",
@@ -3943,7 +5846,8 @@ stargazer(self_flag_basic, self_flag_full,
          no.space = TRUE,
          star.cutoffs = c(.05, .01, .001),
          notes = "* p<0.05; ** p<0.01; *** p<0.001",
-         notes.append = FALSE)
+         notes.append = FALSE,
+         header = FALSE)
 ```
 
 ```{r}
@@ -4125,43 +6029,6 @@ dem_assess_full <- lm(untrustworthy_flag_7day ~ republican + democrat + false_ne
 # Combined regression table with all 6 models
 cat("## Combined Partisan Perception Models\n\n")
 
-# First let's test each model individually to identify issues
-print("Testing Others-Assessment models:")
-print(summary(others_flag_basic))
-print(summary(others_flag_full))
-
-print("Testing Rep-Assessment models:")
-print(summary(rep_assess_basic))
-print(summary(rep_assess_full))
-
-print("Testing Dem-Assessment models:")
-print(summary(dem_assess_basic))
-print(summary(dem_assess_full))
-
-# Generate individual stargazer tables to identify the problematic one
-stargazer(others_flag_basic, others_flag_full,
-         type = "html",
-         title = "Others Assessment Models",
-         no.space = TRUE,
-         star.cutoffs = c(.05, .01, .001),
-         notes = "* p<0.05; ** p<0.01; *** p<0.001",
-         notes.append = FALSE)
-
-stargazer(rep_assess_basic, rep_assess_full,
-         type = "html",
-         title = "Republican Assessment Models",
-         no.space = TRUE,
-         star.cutoffs = c(.05, .01, .001),
-         notes = "* p<0.05; ** p<0.01; *** p<0.001",
-         notes.append = FALSE)
-
-stargazer(dem_assess_basic, dem_assess_full,
-         type = "html",
-         title = "Democrat Assessment Models",
-         no.space = TRUE,
-         star.cutoffs = c(.05, .01, .001),
-         notes = "* p<0.05; ** p<0.01; *** p<0.001",
-         notes.append = FALSE)
 ```
 
 ```{r}
@@ -4373,22 +6240,178 @@ m8 <- full_composite_model
 stargazer(
   m1, m2, m3, m4, m5, m6, m7, m8,
   type = "latex",
-  title = "Digital Term Knowledge Components and Untrustworthy Website Exposure",
+  title = "Digital Literacy Components and Untrustworthy Website Exposure",
   label = "tab:digital_term_knowledge_untrustworthy",
   model.names = FALSE,
   model.numbers = TRUE,
   dep.var.labels = "Untrustworthy Exposure",
   covariate.labels = c(
-    "Term: Adv. Search", "Term: PDF", "Term: Spyware", 
-    "Term: Wiki", "Term: Cache", "Term: Phishing", 
-    "Digital Term Knowledge\n(Composite)", "Republican", "Political Interest", 
+    "Term: Adv. Search", "Term: PDF", "Term: Spyware",
+    "Term: Wiki", "Term: Cache", "Term: Phishing",
+    "Composite Digital Literacy", "Republican", "Political Interest",
     "College", "Female", "Non-White", "Age 30-44", 
     "Age 45-64", "Age 65+"
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+```
+
+##### Sensitivity: Digital Literacy Paradox and Visit Volume
+
+```{r results = "asis"}
+# Sensitivity analysis: does the digital literacy
+# paradox reflect a mechanical volume confound (high-literacy people browse more,
+# so they trip the binary untrustworthy_flag more often), or does it survive
+# adjustment for total visits?
+#
+# M1: total_visits ~ literacy                       (does literacy predict volume at all?)
+# M2: total_visits ~ literacy + demos               (does it survive demographic adjustment?)
+# M3: untrustworthy_flag ~ literacy + total_visits  (does the paradox survive volume control?)
+#                         + demos
+m_volume_simple <- lm(total_visits ~ digital_term_knowledge_score,
+                      data = main_2024, weights = weight)
+
+m_volume_full <- lm(total_visits ~ digital_term_knowledge_score +
+                                   republican + political_interest +
+                                   college + female + non_white +
+                                   age_30_44 + age_45_64 + age_65_plus,
+                    data = main_2024, weights = weight)
+
+m_paradox_volctrl <- lm(untrustworthy_flag ~ digital_term_knowledge_score +
+                                             total_visits +
+                                             republican + political_interest +
+                                             college + female + non_white +
+                                             age_30_44 + age_45_64 + age_65_plus,
+                        data = main_2024, weights = weight)
+
+stargazer(
+  m_volume_simple, m_volume_full, m_paradox_volctrl,
+  type = "latex",
+  title = "Sensitivity of the Digital Literacy Paradox to Visit Volume",
+  label = "tab:digital_literacy_volume_sensitivity",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = c("Total Visits", "Untrustworthy Exposure"),
+  covariate.labels = c(
+    "Composite Digital Literacy", "Total Visits", "Republican",
+    "Political Interest", "College", "Female", "Non-White",
+    "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+```
+
+##### Sensitivity: Digital Literacy Paradox and Source Diversity
+
+```{r results = "asis"}
+# Sensitivity analysis: does the digital literacy
+# paradox reflect a source-diversity confound (high-literacy people visit a more
+# diverse set of sources, so they encounter more untrustworthy ones as a
+# byproduct)? Mirrors the visit-volume sensitivity (M1/M2/M3) exactly, just
+# swapping total_visits for two unique-domain operationalizations:
+#
+#   Set A — total_unique_domains: distinct domains visited per participant (any
+#                                 domain). This is the conservative test: the
+#                                 predictor is essentially independent of the DV
+#                                 because untrustworthy visits are a tiny share
+#                                 of total unique domains for almost every
+#                                 participant.
+#
+#   Set B — listed_unique_domains: distinct domains visited per participant that
+#                                  appear in the union of our three classification
+#                                  lists (hard news ∪ untrustworthy ∪ AI
+#                                  untrustworthy). Closer to a
+#                                  "news/information source diversity" framing,
+#                                  but the DV (untrustworthy_flag) is mechanically
+#                                  bounded by this measure: visited untrustworthy
+#                                  domains are part of listed_unique_domains
+#                                  itself, inducing a baseline positive
+#                                  association with the DV even absent any
+#                                  behavioral story. Any literacy effect that
+#                                  survives this control is therefore surviving
+#                                  a more demanding test, but the diversity
+#                                  coefficient itself should not be over-interpreted.
+#                                  This caveat is acknowledged in the SM text.
+#
+# Within each set:
+#   M1: <diversity> ~ literacy                              (does literacy predict diversity?)
+#   M2: <diversity> ~ literacy + demos                      (survives demographic adjustment?)
+#   M3: untrustworthy_flag ~ literacy + <diversity> + demos (paradox survives diversity control?)
+# where <diversity> ∈ {total_unique_domains, listed_unique_domains}.
+
+# Set A: total unique domains
+m_div_total_simple <- lm(total_unique_domains ~ digital_term_knowledge_score,
+                         data = main_2024, weights = weight)
+
+m_div_total_full <- lm(total_unique_domains ~ digital_term_knowledge_score +
+                                              republican + political_interest +
+                                              college + female + non_white +
+                                              age_30_44 + age_45_64 + age_65_plus,
+                       data = main_2024, weights = weight)
+
+m_paradox_divtotal <- lm(untrustworthy_flag ~ digital_term_knowledge_score +
+                                              total_unique_domains +
+                                              republican + political_interest +
+                                              college + female + non_white +
+                                              age_30_44 + age_45_64 + age_65_plus,
+                         data = main_2024, weights = weight)
+
+# Set B: unique domains in our 3 lists
+m_div_listed_simple <- lm(listed_unique_domains ~ digital_term_knowledge_score,
+                          data = main_2024, weights = weight)
+
+m_div_listed_full <- lm(listed_unique_domains ~ digital_term_knowledge_score +
+                                                republican + political_interest +
+                                                college + female + non_white +
+                                                age_30_44 + age_45_64 + age_65_plus,
+                        data = main_2024, weights = weight)
+
+m_paradox_divlisted <- lm(untrustworthy_flag ~ digital_term_knowledge_score +
+                                               listed_unique_domains +
+                                               republican + political_interest +
+                                               college + female + non_white +
+                                               age_30_44 + age_45_64 + age_65_plus,
+                          data = main_2024, weights = weight)
+
+stargazer(
+  m_div_total_simple, m_div_total_full, m_paradox_divtotal,
+  type = "latex",
+  title = "Sensitivity of the Digital Literacy Paradox to Source Diversity (Total Unique Domains)",
+  label = "tab:digital_literacy_diversity_total_sensitivity",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = c("Total Unique Domains", "Untrustworthy Exposure"),
+  covariate.labels = c(
+    "Composite Digital Literacy", "Total Unique Domains", "Republican",
+    "Political Interest", "College", "Female", "Non-White",
+    "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+
+stargazer(
+  m_div_listed_simple, m_div_listed_full, m_paradox_divlisted,
+  type = "latex",
+  title = "Sensitivity of the Digital Literacy Paradox to Source Diversity (Listed Unique Domains)",
+  label = "tab:digital_literacy_diversity_listed_sensitivity",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = c("Listed Unique Domains", "Untrustworthy Exposure"),
+  covariate.labels = c(
+    "Composite Digital Literacy", "Listed Unique Domains", "Republican",
+    "Political Interest", "College", "Female", "Non-White",
+    "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 
@@ -4437,7 +6460,7 @@ component_graph <- ggplot(all_components_exposure_ai, aes(x = score, y = exposur
   labs(
     x = "Score",
     y = "Percentage Exposed to AI Untrustworthy Websites",
-    title = "Digital Term Knowledge Components and 
+    title = "Digital Literacy Components and
     AI Untrustworthy Website Exposure"
   ) +
   theme_classic()
@@ -4463,9 +6486,9 @@ composite_graph <- ggplot(composite_data_ai, aes(x = digital_literacy_binned, y 
   scale_y_continuous(labels = scales::percent_format()) +
   scale_x_continuous(breaks = seq(0, max(composite_data_ai$digital_literacy_binned), by = 1)) +
   labs(
-    x = "Digital Term Knowledge Composite Score",
+    x = "Digital Literacy Composite Score",
     y = "Percentage Exposed to AI Untrustworthy Websites",
-    title = "Digital Term Knowledge Composite Score and 
+    title = "Digital Literacy Composite Score and
     AI Untrustworthy Website Exposure"
   ) +
   theme_classic()
@@ -4507,22 +6530,22 @@ m8_ai <- full_composite_model_ai
 stargazer(
   m1_ai, m2_ai, m3_ai, m4_ai, m5_ai, m6_ai, m7_ai, m8_ai,
   type = "latex",
-  title = "Digital Term Knowledge Components and AI Untrustworthy Website Exposure",
+  title = "Digital Literacy Components and AI Untrustworthy Website Exposure",
   label = "tab:digital_term_knowledge_ai_untrustworthy",
   model.names = FALSE,  # do not print model names; only numbers
   model.numbers = TRUE, # models will be labeled (1), (2), etc.
   dep.var.labels = "AI Untrustworthy Exposure",
   covariate.labels = c(
-    "Term: Adv. Search", "Term: PDF", "Term: Spyware", 
-    "Term: Wiki", "Term: Cache", "Term: Phishing", 
-    "Digital Term Knowledge (Composite)", "Republican", "Political Interest", 
+    "Term: Adv. Search", "Term: PDF", "Term: Spyware",
+    "Term: Wiki", "Term: Cache", "Term: Phishing",
+    "Composite Digital Literacy", "Republican", "Political Interest",
     "College", "Female", "Non-White", "Age 30-44", 
     "Age 45-64", "Age 65+"
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 
@@ -4659,8 +6682,8 @@ stargazer(
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 
@@ -4790,8 +6813,8 @@ stargazer(
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 
@@ -4923,8 +6946,8 @@ stargazer(
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 
@@ -5050,8 +7073,8 @@ stargazer(
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 ### 6.3.4 AI Usage
@@ -5124,8 +7147,8 @@ stargazer(
   dep.var.labels = "Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 #### 6.3.4.2 AI Usage and AI Untrustworthy Exposure
@@ -5192,8 +7215,8 @@ stargazer(
   dep.var.labels = "AI Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 ### 6.3.5 AI Self-Perceived Detection
@@ -5266,8 +7289,8 @@ stargazer(
   dep.var.labels = "Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 #### 6.3.5.2 AI Self-Perceived Detection and AI Untrustworthy Exposure
@@ -5334,8 +7357,8 @@ stargazer(
   dep.var.labels = "AI Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 ### 6.3.6 AI Attitudes
@@ -5458,8 +7481,8 @@ stargazer(
   dep.var.labels = "Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 
 # Second table: Remaining dimensions
 stargazer(
@@ -5472,8 +7495,8 @@ stargazer(
   dep.var.labels = "Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 
 # Third table: Composite score
 stargazer(
@@ -5486,8 +7509,8 @@ stargazer(
   dep.var.labels = "Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 
@@ -5601,8 +7624,8 @@ stargazer(
   dep.var.labels = "AI Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 
 # Second table: Remaining dimensions
 stargazer(
@@ -5615,8 +7638,8 @@ stargazer(
   dep.var.labels = "AI Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 
 # Third table: Composite score
 stargazer(
@@ -5629,8 +7652,8 @@ stargazer(
   dep.var.labels = "AI Untrustworthy Exposure",
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 ### 6.3.7 AI Discernment
@@ -5733,8 +7756,8 @@ stargazer(
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 #### 6.3.7.2 AI Discernment and AI Untrustworthy Exposure
@@ -5828,13 +7851,536 @@ stargazer(
   ),
   omit.stat = c("f", "ser"),
   no.space = TRUE,
-  star.cutoffs = c(.05, .01, .001)
-)
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+```
+
+
+### 6.3.8 AI Impact Perceptions
+
+#### 6.3.8.1 AI Impact and Untrustworthy Websites
+
+```{r fig.align = "center", fig.height = 8, fig.width = 6}
+# Define component variables and labels for AI Impact
+impact_components <- c("ai_election_concern", "ai_influence_self", "ai_influence_others")
+impact_labels <- c("AI Election Concern", "AI Influence on Self", "AI Influence on Others")
+
+# Build a list of summary data for each AI impact component (outcome = untrustworthy_flag)
+component_exposure_list_impact <- list()
+
+for(i in seq_along(impact_components)) {
+  comp <- impact_components[i]
+  lab <- impact_labels[i]
+
+  comp_data <- main_2024 %>%
+    filter(!is.na(!!sym(comp))) %>%
+    group_by(!!sym(comp)) %>%
+    summarise(
+      exposure_rate = diagis::weighted_mean(untrustworthy_flag, weight),
+      exposure_se   = diagis::weighted_se(untrustworthy_flag, weight),
+      n = n()
+    ) %>%
+    mutate(
+      ci_lower = exposure_rate - 1.96 * exposure_se,
+      ci_upper = exposure_rate + 1.96 * exposure_se,
+      component = lab
+    ) %>%
+    rename(score = !!sym(comp))
+
+  component_exposure_list_impact[[i]] <- comp_data
+}
+
+all_components_exposure_impact <- bind_rows(component_exposure_list_impact)
+
+# Faceted plot for individual AI impact components (outcome = untrustworthy_flag)
+component_graph_impact <- ggplot(all_components_exposure_impact, aes(x = score, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  facet_wrap(~ component, scales = "free_x", ncol = 2) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Score",
+    y = "Percentage Exposed to Untrustworthy Website",
+    title = "AI Impact Perceptions and
+    Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+
+# Composite plot using the composite variable ai_impact_score (binned)
+composite_data_impact <- main_2024 %>%
+  mutate(ai_impact_binned = round(ai_impact_score)) %>%
+  group_by(ai_impact_binned) %>%
+  summarise(
+    exposure_rate = diagis::weighted_mean(untrustworthy_flag, weight),
+    exposure_se   = diagis::weighted_se(untrustworthy_flag, weight),
+    n = n()
+  ) %>%
+  mutate(
+    ci_lower = exposure_rate - 1.96 * exposure_se,
+    ci_upper = exposure_rate + 1.96 * exposure_se
+  ) %>%
+  filter(!is.na(ai_impact_binned))
+
+composite_graph_impact <- ggplot(composite_data_impact, aes(x = ai_impact_binned, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_x_continuous(breaks = 1:5) +
+  labs(
+    x = "AI Impact Composite Score",
+    y = "Percentage Exposed to Untrustworthy Website",
+    title = "AI Impact Composite Score and
+    Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+
+# Combine the faceted and composite plots using patchwork
+(component_graph_impact / composite_graph_impact)
+```
+
+```{r}
+ggsave("../figures/ai-impact-general.pdf", width = 6, height = 8)
+```
+
+```{r results = "asis"}
+# Regression Modeling for Outcome = untrustworthy_flag
+
+# Fit individual component models (without controls)
+model_concern <- lm(untrustworthy_flag ~ ai_election_concern, data = main_2024, weights = weight)
+model_self    <- lm(untrustworthy_flag ~ ai_influence_self,   data = main_2024, weights = weight)
+model_others  <- lm(untrustworthy_flag ~ ai_influence_others, data = main_2024, weights = weight)
+
+# Fit composite models using ai_impact_score
+simple_composite_model_impact <- lm(untrustworthy_flag ~ ai_impact_score, data = main_2024, weights = weight)
+full_composite_model_impact   <- lm(untrustworthy_flag ~ ai_impact_score + republican + political_interest +
+                                          college + female + non_white +
+                                          age_30_44 + age_45_64 + age_65_plus,
+                                    data = main_2024, weights = weight)
+
+# Assign short names for regression table
+m1 <- model_concern
+m2 <- model_self
+m3 <- model_others
+m4 <- simple_composite_model_impact
+m5 <- full_composite_model_impact
+
+stargazer(
+  m1, m2, m3, m4, m5,
+  type = "latex",
+  title = "AI Impact Perceptions and Untrustworthy Website Exposure",
+  label = "tab:ai_impact_untrustworthy",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = "Untrustworthy Exposure",
+  covariate.labels = c(
+    "AI Election Concern", "AI Influence on Self", "AI Influence on Others",
+    "AI Impact (Composite)", "Republican", "Political Interest",
+    "College", "Female", "Non-White", "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+```
+
+
+#### 6.3.8.2 AI Impact and AI Untrustworthy Websites
+
+
+```{r fig.align = "center", fig.height = 8, fig.width = 6}
+# Build summary data for each AI Impact component (outcome = ai_untrustworthy_flag)
+component_exposure_list_impact_ai <- list()
+
+for(i in seq_along(impact_components)) {
+  comp <- impact_components[i]
+  lab  <- impact_labels[i]
+
+  comp_data <- main_2024 %>%
+    filter(!is.na(!!sym(comp))) %>%
+    group_by(!!sym(comp)) %>%
+    summarise(
+      exposure_rate = diagis::weighted_mean(ai_untrustworthy_flag, weight),
+      exposure_se   = diagis::weighted_se(ai_untrustworthy_flag, weight),
+      n = n()
+    ) %>%
+    mutate(
+      ci_lower = exposure_rate - 1.96 * exposure_se,
+      ci_upper = exposure_rate + 1.96 * exposure_se,
+      component = lab
+    ) %>%
+    rename(score = !!sym(comp))
+
+  component_exposure_list_impact_ai[[i]] <- comp_data
+}
+
+all_components_exposure_impact_ai <- bind_rows(component_exposure_list_impact_ai)
+
+# Faceted plot for individual components (outcome = ai_untrustworthy_flag)
+component_graph_impact_ai <- ggplot(all_components_exposure_impact_ai, aes(x = score, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  facet_wrap(~ component, scales = "free_x", ncol = 2) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Score",
+    y = "Percentage Exposed to AI-Untrustworthy Website",
+    title = "AI Impact Perceptions and
+    AI-Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+
+# Composite plot using the composite variable ai_impact_score (binned)
+composite_data_impact_ai <- main_2024 %>%
+  mutate(ai_impact_binned = round(ai_impact_score)) %>%
+  group_by(ai_impact_binned) %>%
+  summarise(
+    exposure_rate = diagis::weighted_mean(ai_untrustworthy_flag, weight),
+    exposure_se   = diagis::weighted_se(ai_untrustworthy_flag, weight),
+    n = n()
+  ) %>%
+  mutate(
+    ci_lower = exposure_rate - 1.96 * exposure_se,
+    ci_upper = exposure_rate + 1.96 * exposure_se
+  ) %>%
+  filter(!is.na(ai_impact_binned))
+
+composite_graph_impact_ai <- ggplot(composite_data_impact_ai, aes(x = ai_impact_binned, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_x_continuous(breaks = 1:5) +
+  labs(
+    x = "AI Impact Composite Score",
+    y = "Percentage Exposed to AI-Untrustworthy Website",
+    title = "AI Impact Composite Score and
+    AI-Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+
+# Combine the two plots using patchwork
+(component_graph_impact_ai / composite_graph_impact_ai)
+```
+
+```{r}
+ggsave("../figures/ai-impact-ai.pdf", width = 6, height = 8)
+```
+
+```{r results = "asis"}
+# Regression Modeling for Outcome = ai_untrustworthy_flag
+
+# Fit individual component models (without controls)
+model_concern_ai <- lm(ai_untrustworthy_flag ~ ai_election_concern, data = main_2024, weights = weight)
+model_self_ai    <- lm(ai_untrustworthy_flag ~ ai_influence_self,   data = main_2024, weights = weight)
+model_others_ai  <- lm(ai_untrustworthy_flag ~ ai_influence_others, data = main_2024, weights = weight)
+
+# Fit composite models
+simple_composite_model_impact_ai <- lm(ai_untrustworthy_flag ~ ai_impact_score, data = main_2024, weights = weight)
+full_composite_model_impact_ai   <- lm(ai_untrustworthy_flag ~ ai_impact_score + republican + political_interest +
+                                          college + female + non_white + age_30_44 + age_45_64 + age_65_plus,
+                                       data = main_2024, weights = weight)
+
+# Assign short model names
+m1_ai <- model_concern_ai
+m2_ai <- model_self_ai
+m3_ai <- model_others_ai
+m4_ai <- simple_composite_model_impact_ai
+m5_ai <- full_composite_model_impact_ai
+
+stargazer(
+  m1_ai, m2_ai, m3_ai, m4_ai, m5_ai,
+  type = "latex",
+  title = "AI Impact Perceptions and AI-Untrustworthy Website Exposure",
+  label = "tab:ai_impact_ai_untrustworthy",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = "AI Untrustworthy Exposure",
+  covariate.labels = c(
+    "AI Election Concern", "AI Influence on Self", "AI Influence on Others",
+    "AI Impact (Composite)", "Republican", "Political Interest",
+    "College", "Female", "Non-White", "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+```
+
+### 6.3.9 AI Usage Purposes
+
+#### 6.3.9.1 AI Usage Purposes and Untrustworthy Websites
+
+```{r fig.align = "center", fig.height = 12, fig.width = 8}
+# Define component variables and labels for AI Usage Purposes
+usage_purpose_components <- c("ai_usage_work_tasks", "ai_usage_learning", "ai_usage_creative",
+                              "ai_usage_entertainment", "ai_usage_personal_advice", "ai_usage_social",
+                              "ai_usage_consume_news", "ai_usage_produce_news", "ai_usage_election_info",
+                              "ai_usage_election_discuss", "ai_usage_election_text", "ai_usage_election_visual")
+
+usage_purpose_labels <- c("Work/School Tasks", "Learning", "Creative Projects",
+                          "Entertainment", "Personal Advice", "Social Interaction",
+                          "Consuming News", "Producing News", "Election Information",
+                          "Election Discussions", "Election Text Content", "Election Visual Content")
+
+# Build a list of summary data for each AI usage purpose component (outcome = untrustworthy_flag)
+component_exposure_list_purpose <- list()
+
+for(i in seq_along(usage_purpose_components)) {
+  comp <- usage_purpose_components[i]
+  lab <- usage_purpose_labels[i]
+
+  comp_data <- main_2024 %>%
+    filter(!is.na(!!sym(comp))) %>%
+    group_by(!!sym(comp)) %>%
+    summarise(
+      exposure_rate = diagis::weighted_mean(untrustworthy_flag, weight),
+      exposure_se   = diagis::weighted_se(untrustworthy_flag, weight),
+      n = n()
+    ) %>%
+    mutate(
+      ci_lower = exposure_rate - 1.96 * exposure_se,
+      ci_upper = exposure_rate + 1.96 * exposure_se,
+      component = lab
+    ) %>%
+    rename(score = !!sym(comp))
+
+  component_exposure_list_purpose[[i]] <- comp_data
+}
+
+all_components_exposure_purpose <- bind_rows(component_exposure_list_purpose)
+
+# Faceted plot for individual AI usage purpose components (outcome = untrustworthy_flag)
+ggplot(all_components_exposure_purpose, aes(x = score, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  facet_wrap(~ component, scales = "free_x", ncol = 3) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Score",
+    y = "Percentage Exposed to Untrustworthy Website",
+    title = "AI Usage Purposes and
+    Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+```
+
+```{r}
+ggsave("../figures/ai-usage-purposes-dimensions-general.pdf", width = 8, height = 12)
+```
+
+```{r fig.align = "center", fig.height = 6, fig.width = 6}
+# Composite plot using the composite variable ai_usage_purposes_score (binned)
+composite_data_purpose <- main_2024 %>%
+  mutate(ai_usage_purpose_binned = round(ai_usage_purposes_score)) %>%
+  group_by(ai_usage_purpose_binned) %>%
+  summarise(
+    exposure_rate = diagis::weighted_mean(untrustworthy_flag, weight),
+    exposure_se   = diagis::weighted_se(untrustworthy_flag, weight),
+    n = n()
+  ) %>%
+  mutate(
+    ci_lower = exposure_rate - 1.96 * exposure_se,
+    ci_upper = exposure_rate + 1.96 * exposure_se
+  ) %>%
+  filter(!is.na(ai_usage_purpose_binned))
+
+ggplot(composite_data_purpose, aes(x = ai_usage_purpose_binned, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_x_continuous(breaks = 1:5) +
+  labs(
+    x = "AI Usage Purposes Composite Score",
+    y = "Percentage Exposed to Untrustworthy Website",
+    title = "AI Usage Purposes Composite Score and
+    Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+```
+
+```{r}
+ggsave("../figures/ai-usage-purposes-general.pdf", width = 6, height = 6)
+```
+
+```{r results = "asis"}
+# Regression Modeling for Outcome = untrustworthy_flag
+
+# Fit individual component models (without controls) - election-related usage
+model_elec_info    <- lm(untrustworthy_flag ~ ai_usage_election_info,    data = main_2024, weights = weight)
+model_elec_discuss <- lm(untrustworthy_flag ~ ai_usage_election_discuss, data = main_2024, weights = weight)
+model_elec_text    <- lm(untrustworthy_flag ~ ai_usage_election_text,    data = main_2024, weights = weight)
+model_elec_visual  <- lm(untrustworthy_flag ~ ai_usage_election_visual,  data = main_2024, weights = weight)
+
+# Fit composite models using ai_usage_purposes_score
+simple_composite_model_purpose <- lm(untrustworthy_flag ~ ai_usage_purposes_score, data = main_2024, weights = weight)
+full_composite_model_purpose   <- lm(untrustworthy_flag ~ ai_usage_purposes_score + republican + political_interest +
+                                          college + female + non_white +
+                                          age_30_44 + age_45_64 + age_65_plus,
+                                      data = main_2024, weights = weight)
+
+# Assign short names for regression table
+m1 <- model_elec_info
+m2 <- model_elec_discuss
+m3 <- model_elec_text
+m4 <- model_elec_visual
+m5 <- simple_composite_model_purpose
+m6 <- full_composite_model_purpose
+
+stargazer(
+  m1, m2, m3, m4, m5, m6,
+  type = "latex",
+  title = "AI Usage Purposes and Untrustworthy Website Exposure",
+  label = "tab:ai_usage_purposes_untrustworthy",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = "Untrustworthy Exposure",
+  covariate.labels = c(
+    "Election Info", "Election Discuss", "Election Text", "Election Visual",
+    "Usage Purposes (Composite)", "Republican", "Political Interest",
+    "College", "Female", "Non-White", "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
+```
+
+
+#### 6.3.9.2 AI Usage Purposes and AI Untrustworthy Websites
+
+```{r fig.align = "center", fig.height = 12, fig.width = 8}
+# Build summary data for each AI Usage Purpose component (outcome = ai_untrustworthy_flag)
+component_exposure_list_purpose_ai <- list()
+
+for(i in seq_along(usage_purpose_components)) {
+  comp <- usage_purpose_components[i]
+  lab  <- usage_purpose_labels[i]
+
+  comp_data <- main_2024 %>%
+    filter(!is.na(!!sym(comp))) %>%
+    group_by(!!sym(comp)) %>%
+    summarise(
+      exposure_rate = diagis::weighted_mean(ai_untrustworthy_flag, weight),
+      exposure_se   = diagis::weighted_se(ai_untrustworthy_flag, weight),
+      n = n()
+    ) %>%
+    mutate(
+      ci_lower = exposure_rate - 1.96 * exposure_se,
+      ci_upper = exposure_rate + 1.96 * exposure_se,
+      component = lab
+    ) %>%
+    rename(score = !!sym(comp))
+
+  component_exposure_list_purpose_ai[[i]] <- comp_data
+}
+
+all_components_exposure_purpose_ai <- bind_rows(component_exposure_list_purpose_ai)
+
+# Faceted plot for individual components (outcome = ai_untrustworthy_flag)
+ggplot(all_components_exposure_purpose_ai, aes(x = score, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  facet_wrap(~ component, scales = "free_x", ncol = 3) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Score",
+    y = "Percentage Exposed to AI-Untrustworthy Website",
+    title = "AI Usage Purposes and
+    AI-Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+```
+
+```{r}
+ggsave("../figures/ai-usage-purposes-dimensions-ai.pdf", width = 8, height = 12)
+```
+
+```{r fig.align = "center", fig.height = 6, fig.width = 6}
+# Composite plot using the composite variable ai_usage_purposes_score (binned)
+composite_data_purpose_ai <- main_2024 %>%
+  mutate(ai_usage_purpose_binned = round(ai_usage_purposes_score)) %>%
+  group_by(ai_usage_purpose_binned) %>%
+  summarise(
+    exposure_rate = diagis::weighted_mean(ai_untrustworthy_flag, weight),
+    exposure_se   = diagis::weighted_se(ai_untrustworthy_flag, weight),
+    n = n()
+  ) %>%
+  mutate(
+    ci_lower = exposure_rate - 1.96 * exposure_se,
+    ci_upper = exposure_rate + 1.96 * exposure_se
+  ) %>%
+  filter(!is.na(ai_usage_purpose_binned))
+
+ggplot(composite_data_purpose_ai, aes(x = ai_usage_purpose_binned, y = exposure_rate)) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_x_continuous(breaks = 1:5) +
+  labs(
+    x = "AI Usage Purposes Composite Score",
+    y = "Percentage Exposed to AI-Untrustworthy Website",
+    title = "AI Usage Purposes Composite Score and
+    AI-Untrustworthy Website Exposure"
+  ) +
+  theme_classic()
+```
+
+```{r}
+ggsave("../figures/ai-usage-purposes-ai.pdf", width = 6, height = 6)
+```
+
+```{r results = "asis"}
+# Regression Modeling for Outcome = ai_untrustworthy_flag
+
+# Fit individual component models (without controls) - election-related usage
+model_elec_info_ai    <- lm(ai_untrustworthy_flag ~ ai_usage_election_info,    data = main_2024, weights = weight)
+model_elec_discuss_ai <- lm(ai_untrustworthy_flag ~ ai_usage_election_discuss, data = main_2024, weights = weight)
+model_elec_text_ai    <- lm(ai_untrustworthy_flag ~ ai_usage_election_text,    data = main_2024, weights = weight)
+model_elec_visual_ai  <- lm(ai_untrustworthy_flag ~ ai_usage_election_visual,  data = main_2024, weights = weight)
+
+# Fit composite models
+simple_composite_model_purpose_ai <- lm(ai_untrustworthy_flag ~ ai_usage_purposes_score, data = main_2024, weights = weight)
+full_composite_model_purpose_ai   <- lm(ai_untrustworthy_flag ~ ai_usage_purposes_score + republican + political_interest +
+                                          college + female + non_white + age_30_44 + age_45_64 + age_65_plus,
+                                        data = main_2024, weights = weight)
+
+# Assign short model names
+m1_ai <- model_elec_info_ai
+m2_ai <- model_elec_discuss_ai
+m3_ai <- model_elec_text_ai
+m4_ai <- model_elec_visual_ai
+m5_ai <- simple_composite_model_purpose_ai
+m6_ai <- full_composite_model_purpose_ai
+
+stargazer(
+  m1_ai, m2_ai, m3_ai, m4_ai, m5_ai, m6_ai,
+  type = "latex",
+  title = "AI Usage Purposes and AI-Untrustworthy Website Exposure",
+  label = "tab:ai_usage_purposes_ai_untrustworthy",
+  model.names = FALSE,
+  model.numbers = TRUE,
+  dep.var.labels = "AI Untrustworthy Exposure",
+  covariate.labels = c(
+    "Election Info", "Election Discuss", "Election Text", "Election Visual",
+    "Usage Purposes (Composite)", "Republican", "Political Interest",
+    "College", "Female", "Non-White", "Age 30-44", "Age 45-64", "Age 65+"
+  ),
+  omit.stat = c("f", "ser"),
+  no.space = TRUE,
+  star.cutoffs = c(.05, .01, .001),
+         header = FALSE)
 ```
 
 # 7. Verasight
 
-"In the weeks around the 2020 U.S. Presidential Election, a past study found that 26.2% of American adults visited at least one "untrustworthy" website (i.e., websites that repeatedly publish false content). 
+"In the weeks around the 2020 U.S. Presidential Election, a past study found that 26.2% of American adults visited at least one "untrustworthy" website (i.e., websites that repeatedly publish false content).
 
 Do you think the percentage of American adults that visited at least one such website in the weeks around the 2024 U.S. Presidential Election was more, less, or the same?"
 
@@ -5847,7 +8393,7 @@ verasight_overall <- verasight %>%
   filter(!is.na(society_9)) %>%
   mutate(response = case_when(
     society_9 == "1" ~ "More",
-    society_9 == "2" ~ "Less", 
+    society_9 == "2" ~ "Less",
     society_9 == "3" ~ "Same"
   )) %>%
   group_by(response) %>%
@@ -5860,7 +8406,7 @@ verasight_overall <- verasight %>%
   mutate(
     ci_lower = per - 1.96 * se,
     ci_upper = per + 1.96 * se,
-    formatted = sprintf("%s%% (95%% CI: [%s%%, %s%%])", 
+    formatted = sprintf("%s (95%% CI: [%s, %s])",
                        scales::percent(per, accuracy = 0.1),
                        scales::percent(ci_lower, accuracy = 0.1),
                        scales::percent(ci_upper, accuracy = 0.1))
@@ -5873,7 +8419,6 @@ knitr::kable(verasight_overall,
              caption = "Overall Weighted Responses to 2024 vs 2020 Untrustworthy Website Exposure Question",
              format = "pipe")
 ```
-
 
 # 8. Temporal Analysis: Pre-Election vs. Post-Election Exposure Patterns
 
@@ -6104,11 +8649,11 @@ test_2024 <- weights::wtd.t.test(
   weighty = pre_data_2024$weight
 )
 
-# Calculate Cohen's d for 2024
-pooled_sd_2024 <- sqrt(((sum(post_data_2024$weight) - 1) * test_2024$additional[1]^2 +
-                        (sum(pre_data_2024$weight) - 1) * test_2024$additional[2]^2) /
-                       (sum(post_data_2024$weight) + sum(pre_data_2024$weight) - 2))
-cohens_d_2024 <- (test_2024$additional[3] - test_2024$additional[4]) / pooled_sd_2024
+# Calculate Cohen's d for 2024 (Method 1: Hmisc::wtd.var pooled SD)
+sd_post_2024 <- sqrt(Hmisc::wtd.var(x = post_data_2024$untrustworthy_flag_daily, weights = post_data_2024$weight))
+sd_pre_2024 <- sqrt(Hmisc::wtd.var(x = pre_data_2024$untrustworthy_flag_daily, weights = pre_data_2024$weight))
+pooled_sd_2024 <- sqrt((sd_post_2024^2 + sd_pre_2024^2) / 2)
+cohens_d_2024 <- (test_2024$additional[["Mean.x"]] - test_2024$additional[["Mean.y"]]) / pooled_sd_2024
 
 # Statistical tests for 2020
 pre_data_2020 <- pre_post_data_2020 %>% filter(period == "Pre-Election")
@@ -6121,31 +8666,31 @@ test_2020 <- weights::wtd.t.test(
   weighty = pre_data_2020$weight
 )
 
-# Calculate Cohen's d for 2020
-pooled_sd_2020 <- sqrt(((sum(post_data_2020$weight) - 1) * test_2020$additional[1]^2 +
-                        (sum(pre_data_2020$weight) - 1) * test_2020$additional[2]^2) /
-                       (sum(post_data_2020$weight) + sum(pre_data_2020$weight) - 2))
-cohens_d_2020 <- (test_2020$additional[3] - test_2020$additional[4]) / pooled_sd_2020
+# Calculate Cohen's d for 2020 (Method 1: Hmisc::wtd.var pooled SD)
+sd_post_2020 <- sqrt(Hmisc::wtd.var(x = post_data_2020$untrustworthy_flag_daily, weights = post_data_2020$weight))
+sd_pre_2020 <- sqrt(Hmisc::wtd.var(x = pre_data_2020$untrustworthy_flag_daily, weights = pre_data_2020$weight))
+pooled_sd_2020 <- sqrt((sd_post_2020^2 + sd_pre_2020^2) / 2)
+cohens_d_2020 <- (test_2020$additional[["Mean.x"]] - test_2020$additional[["Mean.y"]]) / pooled_sd_2020
 
-print("2024 Pre-Election vs. Post-Election Test")
+print("=== 2024 Pre-Election vs. Post-Election Test ===")
 print(paste("Pre-Election: ", round(overall_pre_post_2024$percentage[1], 2), "% (95% CI [",
             round(overall_pre_post_2024$ci_lower[1], 2), "%, ",
             round(overall_pre_post_2024$ci_upper[1], 2), "%])"))
 print(paste("Post-Election: ", round(overall_pre_post_2024$percentage[2], 2), "% (95% CI [",
             round(overall_pre_post_2024$ci_lower[2], 2), "%, ",
             round(overall_pre_post_2024$ci_upper[2], 2), "%])"))
-print(paste("t-test: t =", round(test_2024$coefficients[1], 3),
+print(paste("t-test: t(", round(test_2024$coefficients[2], 1), ") =", round(test_2024$coefficients[1], 3),
             ", p =", format.pval(test_2024$coefficients[3], digits = 3),
             ", Cohen's d =", round(cohens_d_2024, 3)))
 
-print("2020 Pre-Election vs. Post-Election Test")
+print("=== 2020 Pre-Election vs. Post-Election Test ===")
 print(paste("Pre-Election: ", round(overall_pre_post_2020$percentage[1], 2), "% (95% CI [",
             round(overall_pre_post_2020$ci_lower[1], 2), "%, ",
             round(overall_pre_post_2020$ci_upper[1], 2), "%])"))
 print(paste("Post-Election: ", round(overall_pre_post_2020$percentage[2], 2), "% (95% CI [",
             round(overall_pre_post_2020$ci_lower[2], 2), "%, ",
             round(overall_pre_post_2020$ci_upper[2], 2), "%])"))
-print(paste("t-test: t =", round(test_2020$coefficients[1], 3),
+print(paste("t-test: t(", round(test_2020$coefficients[2], 1), ") =", round(test_2020$coefficients[1], 3),
             ", p =", format.pval(test_2020$coefficients[3], digits = 3),
             ", Cohen's d =", round(cohens_d_2020, 3)))
 ```
@@ -6254,7 +8799,7 @@ print(knitr::kable(partisan_results %>%
 # Statistical tests by party for 2024
 parties <- c("Democrat", "Republican")
 for (party in parties) {
-  print(paste("2024", party, "Pre vs Post"))
+  print(paste("=== 2024", party, "Pre vs Post ==="))
 
   party_data_2024 <- main_2024 %>% filter(!!sym(tolower(party)) == 1)
 
@@ -6265,11 +8810,11 @@ for (party in parties) {
     weighty = party_data_2024$weight
   )
 
-  # Calculate Cohen's d
-  pooled_sd_party_2024 <- sqrt(((sum(party_data_2024$weight) - 1) * party_test_2024$additional[1]^2 +
-                                (sum(party_data_2024$weight) - 1) * party_test_2024$additional[2]^2) /
-                               (2 * sum(party_data_2024$weight) - 2))
-  cohens_d_party_2024 <- (party_test_2024$additional[3] - party_test_2024$additional[4]) / pooled_sd_party_2024
+  # Calculate Cohen's d (Method 1: Hmisc::wtd.var pooled SD)
+  sd_post_party_2024 <- sqrt(Hmisc::wtd.var(x = party_data_2024$untrustworthy_flag_post, weights = party_data_2024$weight))
+  sd_pre_party_2024 <- sqrt(Hmisc::wtd.var(x = party_data_2024$untrustworthy_flag_pre, weights = party_data_2024$weight))
+  pooled_sd_party_2024 <- sqrt((sd_post_party_2024^2 + sd_pre_party_2024^2) / 2)
+  cohens_d_party_2024 <- (party_test_2024$additional[["Mean.x"]] - party_test_2024$additional[["Mean.y"]]) / pooled_sd_party_2024
 
   party_results_2024 <- partisan_2024 %>% filter(party_group == party)
   print(paste("Pre-Election: ", round(party_results_2024$percentage[1], 2), "% (95% CI [",
@@ -6278,12 +8823,12 @@ for (party in parties) {
   print(paste("Post-Election: ", round(party_results_2024$percentage[2], 2), "% (95% CI [",
               round(party_results_2024$ci_lower[2], 2), "%, ",
               round(party_results_2024$ci_upper[2], 2), "%])"))
-  print(paste("t-test: t =", round(party_test_2024$coefficients[1], 3),
+  print(paste("t-test: t(", round(party_test_2024$coefficients[2], 1), ") =", round(party_test_2024$coefficients[1], 3),
               ", p =", format.pval(party_test_2024$coefficients[3], digits = 3),
               ", Cohen's d =", round(cohens_d_party_2024, 3)))
 
   # 2020 tests
-  print(paste("2020", party, "Pre vs Post"))
+  print(paste("=== 2020", party, "Pre vs Post ==="))
 
   party_data_2020 <- main_2020 %>% filter(!!sym(tolower(party)) == 1)
 
@@ -6294,11 +8839,11 @@ for (party in parties) {
     weighty = party_data_2020$weight
   )
 
-  # Calculate Cohen's d
-  pooled_sd_party_2020 <- sqrt(((sum(party_data_2020$weight) - 1) * party_test_2020$additional[1]^2 +
-                                (sum(party_data_2020$weight) - 1) * party_test_2020$additional[2]^2) /
-                               (2 * sum(party_data_2020$weight) - 2))
-  cohens_d_party_2020 <- (party_test_2020$additional[3] - party_test_2020$additional[4]) / pooled_sd_party_2020
+  # Calculate Cohen's d (Method 1: Hmisc::wtd.var pooled SD)
+  sd_post_party_2020 <- sqrt(Hmisc::wtd.var(x = party_data_2020$untrustworthy_flag_post, weights = party_data_2020$weight))
+  sd_pre_party_2020 <- sqrt(Hmisc::wtd.var(x = party_data_2020$untrustworthy_flag_pre, weights = party_data_2020$weight))
+  pooled_sd_party_2020 <- sqrt((sd_post_party_2020^2 + sd_pre_party_2020^2) / 2)
+  cohens_d_party_2020 <- (party_test_2020$additional[["Mean.x"]] - party_test_2020$additional[["Mean.y"]]) / pooled_sd_party_2020
 
   party_results_2020 <- partisan_2020 %>% filter(party_group == party)
   print(paste("Pre-Election: ", round(party_results_2020$percentage[1], 2), "% (95% CI [",
@@ -6307,7 +8852,7 @@ for (party in parties) {
   print(paste("Post-Election: ", round(party_results_2020$percentage[2], 2), "% (95% CI [",
               round(party_results_2020$ci_lower[2], 2), "%, ",
               round(party_results_2020$ci_upper[2], 2), "%])"))
-  print(paste("t-test: t =", round(party_test_2020$coefficients[1], 3),
+  print(paste("t-test: t(", round(party_test_2020$coefficients[2], 1), ") =", round(party_test_2020$coefficients[1], 3),
               ", p =", format.pval(party_test_2020$coefficients[3], digits = 3),
               ", Cohen's d =", round(cohens_d_party_2020, 3)))
   print("")
@@ -6316,6 +8861,7 @@ for (party in parties) {
 
 ```{r interaction_analysis}
 # Party × Period Interaction Analysis using person-level flags
+print("=== Party × Period Interaction Analysis ===")
 
 # Create long-format data for interaction analysis (2024)
 interaction_data_2024 <- main_2024 %>%
@@ -6380,11 +8926,11 @@ interaction_model_2020 <- lm(
   weights = weight
 )
 
-print("2024 Party × Period Interaction Model")
+print("=== 2024 Party × Period Interaction Model ===")
 model_summary_2024 <- summary(interaction_model_2024)
 print(model_summary_2024)
 
-print("2020 Party × Period Interaction Model")
+print("=== 2020 Party × Period Interaction Model ===")
 model_summary_2020 <- summary(interaction_model_2020)
 print(model_summary_2020)
 
@@ -6422,7 +8968,7 @@ interaction_results <- bind_rows(
     )
   )
 
-print("Comprehensive Interaction Analysis Results")
+print("=== Comprehensive Interaction Analysis Results ===")
 print(knitr::kable(
   interaction_results %>%
     select(year, coefficient, percentage, ci_lower, ci_upper, t_value, p_value, significance),
@@ -6467,7 +9013,7 @@ predictions_combined <- bind_rows(predictions_2020, predictions_2024) %>%
     year_label = paste0(year, " Election")
   )
 
-print("Predicted Exposure Rates from Interaction Models")
+print("=== Predicted Exposure Rates from Interaction Models ===")
 print(knitr::kable(
   predictions_combined %>% select(year, party, period, percentage, ci_lower, ci_upper),
   digits = 2,
@@ -6502,20 +9048,14 @@ interaction_plot
 ggsave("../figures/party-period-interaction.pdf", width = 7, height = 4)
 
 # Statistical significance tests for interactions
-print("Interaction Effect Significance Tests")
+print("=== Interaction Effect Significance Tests ===")
 print(paste("2024 Interaction p-value:", format.pval(model_summary_2024$coefficients[4,4], digits = 3)))
 print(paste("2020 Interaction p-value:", format.pval(model_summary_2020$coefficients[4,4], digits = 3)))
 
 # Model fit statistics
-print("Model Fit Statistics")
+print("=== Model Fit Statistics ===")
 print(paste("2024 R-squared:", round(model_summary_2024$r.squared, 4)))
 print(paste("2024 Adjusted R-squared:", round(model_summary_2024$adj.r.squared, 4)))
 print(paste("2020 R-squared:", round(model_summary_2020$r.squared, 4)))
 print(paste("2020 Adjusted R-squared:", round(model_summary_2020$adj.r.squared, 4)))
 ```
-
-# Session Information
-```{r}
-sessionInfo()
-```
-
